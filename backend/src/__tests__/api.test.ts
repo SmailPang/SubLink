@@ -366,8 +366,8 @@ describe("SubLink backend API", () => {
       .get("/api/admin/logs")
       .set("Authorization", `Bearer ${admin.body.token}`);
 
-    expect(logs.body.items[0]).toMatchObject({ client: "clash" });
-    expect(logs.body.items[1]).toMatchObject({ client: "clash" });
+    expect(logs.body.items[0]).toMatchObject({ client: "clashmetaforandroid" });
+    expect(logs.body.items[1]).toMatchObject({ client: "clashverge" });
   });
 
   it("普通用户只能读取自己的访问日志", async () => {

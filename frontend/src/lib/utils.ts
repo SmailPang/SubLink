@@ -30,6 +30,8 @@ export function statusText(status: string, expiresAt?: string, role?: string) {
 const clientNames: Record<string, string> = {
   default: "默认",
   clash: "Clash",
+  clashverge: "Clash Verge",
+  clashmetaforandroid: "Clash Meta for Android",
   mihomo: "Mihomo",
   shadowrocket: "Shadowrocket",
   singbox: "SingBox",

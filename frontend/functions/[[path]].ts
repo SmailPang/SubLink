@@ -278,8 +278,8 @@ function normalizeClient(client?: string) {
 function detectClientFromUserAgent(userAgent?: string) {
   const compact = (userAgent ?? "").toLowerCase().replace(/[\s._-]+/g, "");
   if (compact.includes("quantumultx")) return "quantumultx";
-  if (compact.includes("clashmetaforandroid")) return "clash";
-  if (compact.includes("clashverge")) return "clash";
+  if (compact.includes("clashmetaforandroid")) return "clashmetaforandroid";
+  if (compact.includes("clashverge")) return "clashverge";
   if (compact.includes("shadowrocket")) return "shadowrocket";
   if (compact.includes("singbox")) return "singbox";
   if (compact.includes("mihomo")) return "mihomo";
