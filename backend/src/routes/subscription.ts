@@ -16,16 +16,16 @@ function applyUpstreamHeaders(remote: Response, res: import("express").Response,
   if (contentType) res.setHeader("content-type", contentType);
 
   for (const header of passthroughHeaders) {
+    // 如果设置了自定义标题，跳过上游的 profile-title
     if (header === "profile-title" && overrideTitle) {
-      res.setHeader(header, overrideTitle);
       continue;
     }
     const value = remote.headers.get(header);
     if (value) res.setHeader(header, value);
   }
 
-  // 如果没有 profile-title，添加自定义标题
-  if (overrideTitle && !res.hasHeader("profile-title")) {
+  // 设置自定义标题（会覆盖上游的值）
+  if (overrideTitle) {
     res.setHeader("profile-title", overrideTitle);
   }
 }
