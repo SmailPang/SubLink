@@ -69,8 +69,6 @@ const clients = [
   { client: "default", name: "默认" },
   { client: "clash", name: "Clash" },
   { client: "mihomo", name: "Mihomo" },
-  { client: "clashmetaforandroid", name: "Clash Meta for Android" },
-  { client: "clashverge", name: "Clash Verge" },
   { client: "shadowrocket", name: "Shadowrocket" },
   { client: "singbox", name: "SingBox" },
   { client: "surge", name: "Surge" },
@@ -280,8 +278,8 @@ function normalizeClient(client?: string) {
 function detectClientFromUserAgent(userAgent?: string) {
   const compact = (userAgent ?? "").toLowerCase().replace(/[\s._-]+/g, "");
   if (compact.includes("quantumultx")) return "quantumultx";
-  if (compact.includes("clashmetaforandroid")) return "clashmetaforandroid";
-  if (compact.includes("clashverge")) return "clashverge";
+  if (compact.includes("clashmetaforandroid")) return "clash";
+  if (compact.includes("clashverge")) return "clash";
   if (compact.includes("shadowrocket")) return "shadowrocket";
   if (compact.includes("singbox")) return "singbox";
   if (compact.includes("mihomo")) return "mihomo";
