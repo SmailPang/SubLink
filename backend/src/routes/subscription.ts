@@ -24,9 +24,10 @@ function applyUpstreamHeaders(remote: Response, res: import("express").Response,
     if (value) res.setHeader(header, value);
   }
 
-  // 设置自定义标题（会覆盖上游的值）
+  // 最后设置自定义标题（会覆盖上游的值）
   if (overrideTitle) {
     res.setHeader("profile-title", overrideTitle);
+    res.setHeader("content-disposition", `attachment; filename="${overrideTitle}"`);
   }
 }
 

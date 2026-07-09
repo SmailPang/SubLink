@@ -795,14 +795,16 @@ async function handleSubscription(request: Request, env: Env, path: string) {
         const contentType = remote.headers.get("content-type");
         if (contentType) responseHeaders.set("content-type", contentType);
 
-        // 设置订阅名称
-        responseHeaders.set("profile-title", siteName);
-
+        // 复制其他响应头，但跳过 profile-title
         for (const header of passthroughHeaders) {
-          if (header === "profile-title") continue; // 跳过，使用自定义名称
+          if (header === "profile-title") continue;
           const value = remote.headers.get(header);
           if (value) responseHeaders.set(header, value);
         }
+
+        // 最后设置自定义订阅名称（确保覆盖任何之前的值）
+        responseHeaders.set("profile-title", siteName);
+        responseHeaders.set("content-disposition", `attachment; filename="${siteName}"`);
 
         await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return new Response(await remote.text(), { headers: responseHeaders });
@@ -820,14 +822,16 @@ async function handleSubscription(request: Request, env: Env, path: string) {
       const contentType = remote.headers.get("content-type");
       if (contentType) responseHeaders.set("content-type", contentType);
 
-      // 设置订阅名称
-      responseHeaders.set("profile-title", siteName);
-
+      // 复制其他响应头，但跳过 profile-title
       for (const header of passthroughHeaders) {
-        if (header === "profile-title") continue; // 跳过，使用自定义名称
+        if (header === "profile-title") continue;
         const value = remote.headers.get(header);
         if (value) responseHeaders.set(header, value);
       }
+
+      // 最后设置自定义订阅名称（确保覆盖任何之前的值）
+      responseHeaders.set("profile-title", siteName);
+      responseHeaders.set("content-disposition", `attachment; filename="${siteName}"`);
 
       await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
       return new Response(await remote.text(), { headers: responseHeaders });
