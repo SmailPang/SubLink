@@ -804,7 +804,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
 
         // 最后设置自定义订阅名称（确保覆盖任何之前的值）
         responseHeaders.set("profile-title", siteName);
-        responseHeaders.set("content-disposition", `attachment; filename="${siteName}"`);
+        responseHeaders.set("content-disposition", `attachment; filename=${siteName}`);
 
         await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return new Response(await remote.text(), { headers: responseHeaders });
@@ -831,7 +831,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
 
       // 最后设置自定义订阅名称（确保覆盖任何之前的值）
       responseHeaders.set("profile-title", siteName);
-      responseHeaders.set("content-disposition", `attachment; filename="${siteName}"`);
+      responseHeaders.set("content-disposition", `attachment; filename=${siteName}`);
 
       await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
       return new Response(await remote.text(), { headers: responseHeaders });
