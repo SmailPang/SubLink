@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 export function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, string> | null>(null);
   useEffect(() => {
-    api.settings().then((result) => setSettings({ siteName: "SubLink", subscriptionMode: "proxy", ...result.settings })).catch((error) => toast.error(error instanceof Error ? error.message : "加载失败"));
+    api.settings().then((result) => setSettings({ siteName: "SubLink", subscriptionMode: "proxy", remoteConfig: "none", ...result.settings })).catch((error) => toast.error(error instanceof Error ? error.message : "加载失败"));
   }, []);
   async function save() {
     if (!settings) return;
@@ -40,7 +40,7 @@ export function SettingsPage() {
             onChange={(event) => setSettings({ ...settings, publicBaseUrl: event.target.value })}
             placeholder="例如：https://sub.example.com"
           />
-          <p className="text-sm text-muted-foreground">这里会作为“我的订阅”页面中订阅链接的域名部分，末尾不需要填写 /sub。</p>
+          <p className="text-sm text-muted-foreground">这里会作为"我的订阅"页面中订阅链接的域名部分，末尾不需要填写 /sub。</p>
         </div>
         <div className="space-y-2">
           <Label>订阅响应模式</Label>
@@ -57,6 +57,24 @@ export function SettingsPage() {
             </SelectContent>
           </Select>
           <p className="text-sm text-muted-foreground">代理上游会隐藏上游地址但依赖 Cloudflare 到上游的连通性；直跳上游可减少手机客户端 timeout，但客户端可能看到最终上游地址。</p>
+        </div>
+        <div className="space-y-2">
+          <Label>远程配置</Label>
+          <Select
+            value={settings.remoteConfig || "none"}
+            onValueChange={(value) => setSettings({ ...settings, remoteConfig: value || "none" })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">不使用</SelectItem>
+              <SelectItem value="acl_default">ACL_默认版</SelectItem>
+              <SelectItem value="acl_no_test">ACL_去测速版</SelectItem>
+              <SelectItem value="acl_no_ad">ACL_去广告版</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">远程配置用于订阅转换，可选择不同的 ACL 规则集。选择后将应用于订阅链接的规则处理。</p>
         </div>
         <Button onClick={save}>保存</Button>
       </CardContent>
