@@ -762,14 +762,44 @@ async function handleSubscription(request: Request, env: Env, path: string) {
   }
 
   const upstream = await pickUpstream(env, client);
+  const settings = await getSettings(env);
+  const converterUrl = settings.converterUrl;
+  const remoteConfig = settings.remoteConfig;
+
   try {
     if (upstream?.enabled && upstream.url) {
-      const settings = await getSettings(env);
       if (settings.subscriptionMode === "redirect") {
         await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return Response.redirect(upstream.url, 302);
       }
 
+      // 如果配置了订阅转换服务和远程配置
+      if (converterUrl && remoteConfig && remoteConfig !== "none") {
+        const convertUrl = new URL(converterUrl);
+        convertUrl.searchParams.set("target", "clash");
+        convertUrl.searchParams.set("url", upstream.url);
+        convertUrl.searchParams.set("config", remoteConfig);
+
+        const headers = new Headers();
+        if (ua) headers.set("user-agent", ua);
+        const accept = request.headers.get("accept");
+        if (accept) headers.set("accept", accept);
+
+        const remote = await fetch(convertUrl.toString(), { headers, signal: AbortSignal.timeout(15000) });
+        if (!remote.ok) throw new Error("converter failed");
+
+        const responseHeaders = new Headers();
+        const contentType = remote.headers.get("content-type");
+        if (contentType) responseHeaders.set("content-type", contentType);
+        for (const header of passthroughHeaders) {
+          const value = remote.headers.get(header);
+          if (value) responseHeaders.set(header, value);
+        }
+        await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
+        return new Response(await remote.text(), { headers: responseHeaders });
+      }
+
+      // 否则直接代理上游
       const headers = new Headers();
       if (ua) headers.set("user-agent", ua);
       const accept = request.headers.get("accept");

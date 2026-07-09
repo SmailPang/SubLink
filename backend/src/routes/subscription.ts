@@ -98,6 +98,10 @@ export function subscriptionRoutes(store: Store) {
     }
 
     const upstream = pickUpstream(store, client);
+    const settings = store.getSettings();
+    const converterUrl = settings.converterUrl;
+    const remoteConfig = settings.remoteConfig;
+
     try {
       if (upstream?.enabled && upstream.url) {
         if (shouldRedirectToUpstream(store)) {
@@ -105,6 +109,26 @@ export function subscriptionRoutes(store: Store) {
           return res.redirect(302, upstream.url);
         }
 
+        // 如果配置了订阅转换服务和远程配置
+        if (converterUrl && remoteConfig && remoteConfig !== "none") {
+          const convertUrl = new URL(converterUrl);
+          convertUrl.searchParams.set("target", "clash");
+          convertUrl.searchParams.set("url", upstream.url);
+          convertUrl.searchParams.set("config", remoteConfig);
+
+          const remote = await fetch(convertUrl.toString(), {
+            headers: upstreamRequestHeaders(req),
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (!remote.ok) throw new Error("converter failed");
+          const text = await remote.text();
+          applyUpstreamHeaders(remote, res);
+          store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
+          return res.send(text);
+        }
+
+        // 否则直接代理上游
         const remote = await fetch(upstream.url, {
           headers: upstreamRequestHeaders(req),
           signal: AbortSignal.timeout(8000)
