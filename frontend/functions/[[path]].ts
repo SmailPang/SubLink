@@ -69,6 +69,8 @@ const clients = [
   { client: "default", name: "默认" },
   { client: "clash", name: "Clash" },
   { client: "mihomo", name: "Mihomo" },
+  { client: "clashmetaforandroid", name: "Clash Meta for Android" },
+  { client: "clashverge", name: "Clash Verge" },
   { client: "shadowrocket", name: "Shadowrocket" },
   { client: "singbox", name: "SingBox" },
   { client: "surge", name: "Surge" },

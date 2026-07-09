@@ -26,3 +26,24 @@ export function statusText(status: string, expiresAt?: string, role?: string) {
   if (status === "disabled") return "停用"
   return "正常"
 }
+
+const clientNames: Record<string, string> = {
+  default: "默认",
+  clash: "Clash",
+  clashverge: "Clash Verge",
+  clashmetaforandroid: "Clash Meta for Android",
+  mihomo: "Mihomo",
+  shadowrocket: "Shadowrocket",
+  singbox: "SingBox",
+  surge: "Surge",
+  loon: "Loon",
+  stash: "Stash",
+  quantumultx: "Quantumult X",
+  egern: "Egern",
+  v2ray: "V2Ray"
+}
+
+export function formatClientName(client?: string | null) {
+  if (!client) return "暂无记录"
+  return clientNames[client] ?? client
+}

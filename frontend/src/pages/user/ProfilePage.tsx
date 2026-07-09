@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { formatDateTime, formatExpiresAt, statusText } from "@/lib/utils";
+import { formatDateTime, formatExpiresAt, formatClientName, statusText } from "@/lib/utils";
 import type { PublicUser } from "@/types/user";
 
 export function ProfilePage() {
@@ -114,7 +114,7 @@ export function ProfilePage() {
         <CardContent className="space-y-3">
           <div className="rounded-2xl bg-muted px-4 py-3">
             <div className="text-xs text-muted-foreground">最近使用客户端</div>
-            <div className="mt-1 text-sm font-semibold">{user.lastClient || "暂无记录"}</div>
+            <div className="mt-1 text-sm font-semibold">{formatClientName(user.lastClient)}</div>
           </div>
           <div className="rounded-2xl bg-muted px-4 py-3">
             <div className="text-xs text-muted-foreground">最近访问时间</div>
