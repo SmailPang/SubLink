@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { defaultExpiresAt } from "@/lib/datetime";
-import { formatDateTime, statusText } from "@/lib/utils";
+import { formatDateTime, formatExpiresAt, statusText } from "@/lib/utils";
 import type { PublicUser } from "@/types/user";
 
 export function UsersPage() {
@@ -135,8 +135,8 @@ export function UsersPage() {
                 {users.map((user) => (
                   <TableRow key={user.id}>
                     <TableCell>{user.username}</TableCell>
-                    <TableCell><Badge variant={user.status === "active" ? "secondary" : "destructive"}>{statusText(user.status, user.expiresAt)}</Badge></TableCell>
-                    <TableCell>{formatDateTime(user.expiresAt)}</TableCell>
+                    <TableCell><Badge variant={user.status === "active" ? "secondary" : "destructive"}>{statusText(user.status, user.expiresAt, user.role)}</Badge></TableCell>
+                    <TableCell>{formatExpiresAt(user.expiresAt, user.role)}</TableCell>
                     <TableCell>{user.remark || "暂无备注"}</TableCell>
                     <TableCell>{formatDateTime(user.lastAccessAt)}</TableCell>
                     <TableCell>

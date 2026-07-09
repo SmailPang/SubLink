@@ -756,7 +756,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
   const ip = requestIp(request);
   const ip_location = requestLocation(request, ip);
 
-  if (!user || user.status !== "active" || new Date(user.expires_at).getTime() < Date.now()) {
+  if (!user || user.status !== "active" || (user.role !== "admin" && new Date(user.expires_at).getTime() < Date.now())) {
     await writeAccessLog(env, { user_id: user?.id ?? null, username: user?.username ?? "未知用户", client, ip, ip_location, user_agent: ua, status: "failed", response_time_ms: Date.now() - started });
     return text("订阅链接已失效", 403);
   }

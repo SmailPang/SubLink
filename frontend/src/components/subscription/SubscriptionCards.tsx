@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { copyText } from "@/lib/copy";
-import { formatDateTime, statusText } from "@/lib/utils";
+import { formatDateTime, formatExpiresAt, statusText } from "@/lib/utils";
 import type { SubscriptionData } from "@/types/user";
 
 export function SubscriptionCards({ data, onReset }: { data: SubscriptionData; onReset: () => void }) {
@@ -46,8 +46,8 @@ export function SubscriptionCards({ data, onReset }: { data: SubscriptionData; o
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
             <div className="flex justify-between"><span className="text-muted-foreground">用户名</span><span>{data.user.username}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">账号状态</span><Badge variant={data.user.status === "active" ? "secondary" : "destructive"}>{statusText(data.user.status, data.user.expiresAt)}</Badge></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">到期时间</span><span>{formatDateTime(data.user.expiresAt)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">账号状态</span><Badge variant={data.user.status === "active" ? "secondary" : "destructive"}>{statusText(data.user.status, data.user.expiresAt, data.user.role)}</Badge></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">到期时间</span><span>{formatExpiresAt(data.user.expiresAt, data.user.role)}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">最近使用客户端</span><span>{data.user.lastClient || "暂无记录"}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">最近访问时间</span><span>{formatDateTime(data.user.lastAccessAt)}</span></div>
           </CardContent>

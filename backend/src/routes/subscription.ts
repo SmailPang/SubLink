@@ -84,7 +84,7 @@ export function subscriptionRoutes(store: Store) {
     const ua = req.get("user-agent") || "";
     const client = clientParam ? normalizeClient(clientParam) : detectClientFromUserAgent(ua) ?? "default";
 
-    if (!user || user.status !== "active" || new Date(user.expires_at).getTime() < Date.now()) {
+    if (!user || user.status !== "active" || (user.role !== "admin" && new Date(user.expires_at).getTime() < Date.now())) {
       store.writeAccessLog({
         user_id: user?.id ?? null,
         username: user?.username ?? "未知用户",

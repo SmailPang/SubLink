@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { formatDateTime, statusText } from "@/lib/utils";
+import { formatDateTime, formatExpiresAt, statusText } from "@/lib/utils";
 import type { PublicUser } from "@/types/user";
 
 export function ProfilePage() {
@@ -92,8 +92,8 @@ export function ProfilePage() {
         <CardContent className="space-y-3">
           {[
             ["用户名", user.username],
-            ["账号状态", statusText(user.status, user.expiresAt)],
-            ["到期时间", formatDateTime(user.expiresAt)],
+            ["账号状态", statusText(user.status, user.expiresAt, user.role)],
+            ["到期时间", formatExpiresAt(user.expiresAt, user.role)],
             ["账号角色", user.role === "admin" ? "管理员" : "普通用户"],
           ].map(([label, value]) => (
             <div key={label} className="rounded-2xl bg-muted px-4 py-3">

@@ -16,8 +16,13 @@ export function formatDateTime(value?: string | null) {
   }).format(new Date(value))
 }
 
-export function statusText(status: string, expiresAt?: string) {
-  if (expiresAt && new Date(expiresAt).getTime() < Date.now()) return "已过期"
+export function formatExpiresAt(value: string, role?: string) {
+  if (role === "admin") return "-"
+  return formatDateTime(value)
+}
+
+export function statusText(status: string, expiresAt?: string, role?: string) {
+  if (role !== "admin" && expiresAt && new Date(expiresAt).getTime() < Date.now()) return "已过期"
   if (status === "disabled") return "停用"
   return "正常"
 }
