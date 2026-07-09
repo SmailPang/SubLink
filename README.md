@@ -63,7 +63,7 @@ user / user123
 
 ## 订阅链接
 
-用户登录后可在“我的订阅”复制通用订阅链接：
+用户登录后可在”我的订阅”复制通用订阅链接：
 
 ```text
 /sub/{token}
@@ -92,7 +92,7 @@ user / user123
 本地 Express 后端启用校验：
 
 ```powershell
-$env:TURNSTILE_SECRET_KEY="<你的 Turnstile Secret Key>"
+$env:TURNSTILE_SECRET_KEY=”<你的 Turnstile Secret Key>”
 npm run dev
 ```
 
