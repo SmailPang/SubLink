@@ -765,6 +765,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
   const settings = await getSettings(env);
   const converterUrl = settings.converterUrl;
   const remoteConfig = settings.remoteConfig;
+  const siteName = settings.siteName || "SubLink";
 
   try {
     if (upstream?.enabled && upstream.url) {
@@ -791,10 +792,16 @@ async function handleSubscription(request: Request, env: Env, path: string) {
         const responseHeaders = new Headers();
         const contentType = remote.headers.get("content-type");
         if (contentType) responseHeaders.set("content-type", contentType);
+
+        // 设置订阅名称
+        responseHeaders.set("profile-title", siteName);
+
         for (const header of passthroughHeaders) {
+          if (header === "profile-title") continue; // 跳过，使用自定义名称
           const value = remote.headers.get(header);
           if (value) responseHeaders.set(header, value);
         }
+
         await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return new Response(await remote.text(), { headers: responseHeaders });
       }
@@ -806,13 +813,20 @@ async function handleSubscription(request: Request, env: Env, path: string) {
       if (accept) headers.set("accept", accept);
       const remote = await fetch(upstream.url, { headers, signal: AbortSignal.timeout(8000) });
       if (!remote.ok) throw new Error("bad upstream");
+
       const responseHeaders = new Headers();
       const contentType = remote.headers.get("content-type");
       if (contentType) responseHeaders.set("content-type", contentType);
+
+      // 设置订阅名称
+      responseHeaders.set("profile-title", siteName);
+
       for (const header of passthroughHeaders) {
+        if (header === "profile-title") continue; // 跳过，使用自定义名称
         const value = remote.headers.get(header);
         if (value) responseHeaders.set(header, value);
       }
+
       await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
       return new Response(await remote.text(), { headers: responseHeaders });
     }

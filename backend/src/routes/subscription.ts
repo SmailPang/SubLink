@@ -11,13 +11,22 @@ const passthroughHeaders = [
   "content-disposition"
 ];
 
-function applyUpstreamHeaders(remote: Response, res: import("express").Response) {
+function applyUpstreamHeaders(remote: Response, res: import("express").Response, overrideTitle?: string) {
   const contentType = remote.headers.get("content-type");
   if (contentType) res.setHeader("content-type", contentType);
 
   for (const header of passthroughHeaders) {
+    if (header === "profile-title" && overrideTitle) {
+      res.setHeader(header, overrideTitle);
+      continue;
+    }
     const value = remote.headers.get(header);
     if (value) res.setHeader(header, value);
+  }
+
+  // 如果没有 profile-title，添加自定义标题
+  if (overrideTitle && !res.hasHeader("profile-title")) {
+    res.setHeader("profile-title", overrideTitle);
   }
 }
 
@@ -101,6 +110,7 @@ export function subscriptionRoutes(store: Store) {
     const settings = store.getSettings();
     const converterUrl = settings.converterUrl;
     const remoteConfig = settings.remoteConfig;
+    const siteName = settings.siteName || "SubLink";
 
     try {
       if (upstream?.enabled && upstream.url) {
@@ -123,7 +133,7 @@ export function subscriptionRoutes(store: Store) {
 
           if (!remote.ok) throw new Error("converter failed");
           const text = await remote.text();
-          applyUpstreamHeaders(remote, res);
+          applyUpstreamHeaders(remote, res, siteName);
           store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
           return res.send(text);
         }
@@ -135,7 +145,7 @@ export function subscriptionRoutes(store: Store) {
         });
         if (!remote.ok) throw new Error("bad upstream");
         const text = await remote.text();
-        applyUpstreamHeaders(remote, res);
+        applyUpstreamHeaders(remote, res, siteName);
         store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return res.send(text);
       }
