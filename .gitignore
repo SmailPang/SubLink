@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+*.log
+.env
+.env.*
+tail.out.txt
+tail.err.txt

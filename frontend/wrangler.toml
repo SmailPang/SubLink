@@ -1,0 +1,9 @@
+name = "sublink"
+compatibility_date = "2026-07-09"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sublink"
+database_id = "e78b70e5-9bd6-4f92-a758-f3ce6ddd92bc"
+preview_database_id = "DB"
