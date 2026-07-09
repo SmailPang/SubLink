@@ -111,16 +111,18 @@ export function subscriptionRoutes(store: Store) {
     const converterUrl = settings.converterUrl;
     const remoteConfig = settings.remoteConfig;
     const siteName = settings.siteName || "SubLink";
+    const useConverter = converterUrl && remoteConfig && remoteConfig !== "none";
 
     try {
       if (upstream?.enabled && upstream.url) {
-        if (shouldRedirectToUpstream(store)) {
+        // 如果配置了订阅转换，不能直跳（需要转换）
+        if (shouldRedirectToUpstream(store) && !useConverter) {
           store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
           return res.redirect(302, upstream.url);
         }
 
         // 如果配置了订阅转换服务和远程配置
-        if (converterUrl && remoteConfig && remoteConfig !== "none") {
+        if (useConverter) {
           const convertUrl = new URL(converterUrl);
           convertUrl.searchParams.set("target", "clash");
           convertUrl.searchParams.set("url", upstream.url);
