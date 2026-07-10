@@ -238,6 +238,20 @@ describe("SubLink backend API", () => {
         expect.objectContaining({ client: "mihomo", url: "https://example.com/mihomo", enabled: false })
       ])
     );
+
+    const userLogin = await request(app)
+      .post("/api/auth/login")
+      .send({ username: "user", password: "user123" });
+    const subscription = await request(app)
+      .get("/api/user/subscription")
+      .set("Authorization", `Bearer ${userLogin.body.token}`);
+
+    expect(subscription.body.clientLinks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ client: "clash" })])
+    );
+    expect(subscription.body.clientLinks).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ client: "mihomo" })])
+    );
   });
 
   it("代理上游订阅时会保留 Clash 流量信息响应头", async () => {

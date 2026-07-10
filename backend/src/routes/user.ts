@@ -20,14 +20,16 @@ export function userRoutes(store: Store) {
     const publicUser = store.publicUser(user);
     const origin = baseUrl(req);
     const upstreams = store.listUpstreams();
-    const clientLinks = userVisibleClients.map((item) => {
+    const clientLinks = userVisibleClients.flatMap((item) => {
       const upstream = upstreams.find((row) => row.client === item.client);
-      return {
+      if (upstream && !upstream.enabled) return [];
+
+      return [{
         client: item.client,
         name: clientName(item.client),
         link: `${origin}/sub/${user.token}/${item.client}`,
-        enabled: upstream?.enabled ?? true
-      };
+        enabled: true
+      }];
     });
 
     return res.json({

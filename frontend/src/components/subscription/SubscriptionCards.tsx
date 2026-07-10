@@ -71,7 +71,7 @@ export function SubscriptionCards({ data, onReset }: { data: SubscriptionData; o
           <CardTitle>专用客户端订阅链接</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
-          {data.clientLinks.map((item) => (
+          {data.clientLinks.filter((item) => item.enabled).map((item) => (
             <div key={item.client} className="rounded-lg border p-3">
               <div className="mb-2 flex items-center justify-between">
                 <div className="font-medium">{item.name}</div>

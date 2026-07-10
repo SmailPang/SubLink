@@ -490,12 +490,17 @@ async function handleApi(request: Request, env: Env, path: string) {
       return json({
         user: publicUser(user),
         genericLink: `${origin}/sub/${user.token}`,
-        clientLinks: userVisibleClients.map((item) => ({
-          client: item.client,
-          name: item.name,
-          link: `${origin}/sub/${user.token}/${item.client}`,
-          enabled: Boolean(upstreams.find((row) => row.client === item.client)?.enabled ?? 1)
-        })),
+        clientLinks: userVisibleClients.flatMap((item) => {
+          const upstream = upstreams.find((row) => row.client === item.client);
+          if (upstream && !upstream.enabled) return [];
+
+          return [{
+            client: item.client,
+            name: item.name,
+            link: `${origin}/sub/${user.token}/${item.client}`,
+            enabled: true
+          }];
+        }),
         instructions: [
           "推荐优先使用通用订阅链接。",
           "如果客户端无法自动识别，请使用对应客户端专用链接。",
