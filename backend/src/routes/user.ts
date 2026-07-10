@@ -3,6 +3,8 @@ import { z } from "zod";
 import { clientName, userVisibleClients } from "../clients.js";
 import type { Store } from "../db.js";
 import { withIpLocation } from "../ipGeo.js";
+import { accessLogQuery } from "../logQuery.js";
+import { parseSubscriptionUserinfo } from "../subscriptionInfo.js";
 import type { AuthedRequest } from "../types.js";
 
 function baseUrl(req: AuthedRequest) {
@@ -20,6 +22,7 @@ export function userRoutes(store: Store) {
     const publicUser = store.publicUser(user);
     const origin = baseUrl(req);
     const upstreams = store.listUpstreams();
+    const usageUpstream = upstreams.find((row) => row.enabled && row.subscriptionUserinfo);
     const clientLinks = userVisibleClients.flatMap((item) => {
       const upstream = upstreams.find((row) => row.client === item.client);
       if (upstream && !upstream.enabled) return [];
@@ -36,6 +39,7 @@ export function userRoutes(store: Store) {
       user: publicUser,
       genericLink: `${origin}/sub/${user.token}`,
       clientLinks,
+      usage: parseSubscriptionUserinfo(usageUpstream?.subscriptionUserinfo, usageUpstream?.lastCheckedAt),
       instructions: [
         "推荐优先使用通用订阅链接。",
         "如果客户端无法自动识别，请使用对应客户端专用链接。",
@@ -52,7 +56,8 @@ export function userRoutes(store: Store) {
 
   router.get("/logs", async (req: AuthedRequest, res) => {
     const id = req.user?.id ?? 0;
-    return res.json({ items: await withIpLocation(store.listLogsByUser(id)) });
+    const result = store.listLogsByUser(id, accessLogQuery(req));
+    return res.json({ ...result, items: await withIpLocation(result.items) });
   });
 
   router.get("/announcements", (req: AuthedRequest, res) => {

@@ -55,6 +55,8 @@ npm run cf:deploy                # build 后 wrangler pages deploy
 - **订阅签发** ([subscription.ts](backend/src/routes/subscription.ts) 与 Function 内 `handleSubscription`)：校验 token → 账号 `active` 且未过期 → `pickUpstream` 选上游（含 clash/mihomo/default 回退）→ 若 `settings.subscriptionMode === "redirect"` 则 302 跳转，否则代理 fetch 上游并透传 `subscription-userinfo` 等 header；无可用上游时返回本地 `sampleSubscription` 模拟内容。每次请求（含失败）都写 `access_logs`。
 - **客户端识别**：URL 未带 `{client}` 时用 `detectClientFromUserAgent` 从 UA 推断。客户端清单集中在 [clients.ts](backend/src/clients.ts)（CF 侧有同名副本）。`userVisibleClients` 排除 `default` 和 `v2ray`。
 - **数据存储**：Express 侧所有 SQL 封装在 [db.ts](backend/src/db.ts) 的 `Store` 接口后；`createStore` 里含轻量的运行时 schema 迁移（如 `ALTER TABLE ... ADD COLUMN must_change_password`）和默认账号种子逻辑。
+- **D1 初始化**：Cloudflare 请求链路不再运行通用 `seed()`；表结构与上游客户端种子由 `frontend/migrations/` 管理。仅登录时执行旧库列兼容检查，并在空库中创建强制改密的默认用户。
+- **运维数据**：`upstreams` 保存健康状态、延迟、错误与 `subscription-userinfo`；`admin_audit_logs` 保存管理员写操作；访问日志接口采用服务端筛选和分页。
 
 ## 前端结构
 

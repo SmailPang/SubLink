@@ -626,4 +626,45 @@ describe("SubLink backend API", () => {
     expect(reopened.findUserByUsername("member")?.role).toBe("user");
     reopened.db.close();
   });
+
+  it("上游健康检测会保存流量信息并显示在我的订阅", async () => {
+    const upstreamUrl = await startUpstreamServer();
+    const { app, token: adminToken } = await login("admin", "admin123");
+    await request(app).put("/api/admin/upstreams/clash").set("Authorization", `Bearer ${adminToken}`).send({ url: upstreamUrl, enabled: true });
+
+    const health = await request(app).post("/api/admin/upstreams/clash/test").set("Authorization", `Bearer ${adminToken}`);
+    expect(health.status).toBe(200);
+    expect(health.body.upstream).toMatchObject({ healthStatus: "healthy", subscriptionUserinfo: expect.stringContaining("total=") });
+
+    const userLogin = await request(app).post("/api/auth/login").send({ username: "user", password: "user123" });
+    const subscription = await request(app).get("/api/user/subscription").set("Authorization", `Bearer ${userLogin.body.token}`);
+    expect(subscription.body.usage).toMatchObject({ upload: 1024, download: 2048, used: 3072, total: 107374182400 });
+  });
+
+  it("支持批量管理用户、日志分页清理、操作审计和增强仪表盘", async () => {
+    const { app, token } = await login("admin", "admin123");
+    const first = await request(app).post("/api/admin/users").set("Authorization", `Bearer ${token}`).send({ username: "batch-a", password: "password" });
+    const second = await request(app).post("/api/admin/users").set("Authorization", `Bearer ${token}`).send({ username: "batch-b", password: "password" });
+    const batch = await request(app).post("/api/admin/users/batch").set("Authorization", `Bearer ${token}`).send({ ids: [first.body.user.id, second.body.user.id], action: "disable" });
+    expect(batch.status).toBe(200);
+    expect(batch.body.affected).toBe(2);
+
+    const users = await request(app).get("/api/admin/users").set("Authorization", `Bearer ${token}`);
+    expect(users.body.items.filter((item: { username: string }) => item.username.startsWith("batch-")).every((item: { status: string }) => item.status === "disabled")).toBe(true);
+
+    const userLogin = await request(app).post("/api/auth/login").send({ username: "user", password: "user123" });
+    const subscription = await request(app).get("/api/user/subscription").set("Authorization", `Bearer ${userLogin.body.token}`);
+    await request(app).get(`/sub/${subscription.body.user.token}`).set("User-Agent", "Mihomo/Test");
+    const logs = await request(app).get("/api/admin/logs?page=1&pageSize=10&client=mihomo").set("Authorization", `Bearer ${token}`);
+    expect(logs.body).toMatchObject({ page: 1, pageSize: 10 });
+    expect(logs.body.total).toBeGreaterThan(0);
+
+    const dashboard = await request(app).get("/api/admin/dashboard").set("Authorization", `Bearer ${token}`);
+    expect(dashboard.body).toMatchObject({ todayRequests: expect.any(Number), todaySuccess: expect.any(Number), averageResponseMs: expect.any(Number), dailyTrend: expect.any(Array), clientStats: expect.any(Array) });
+
+    const cleanup = await request(app).delete(`/api/admin/logs?before=${encodeURIComponent(new Date(Date.now() + 86400000).toISOString())}`).set("Authorization", `Bearer ${token}`);
+    expect(cleanup.body.deleted).toBeGreaterThan(0);
+    const audits = await request(app).get("/api/admin/audit-logs").set("Authorization", `Bearer ${token}`);
+    expect(audits.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ action: "user.batch.disable" }), expect.objectContaining({ action: "access_log.cleanup" })]));
+  });
 });

@@ -27,5 +27,16 @@ export interface SubscriptionData {
   user: PublicUser;
   genericLink: string;
   clientLinks: ClientLink[];
+  usage: SubscriptionUsage | null;
   instructions: string[];
+}
+
+export interface SubscriptionUsage {
+  upload: number;
+  download: number;
+  used: number;
+  total: number;
+  remaining: number;
+  expire: number | null;
+  updatedAt: string | null;
 }

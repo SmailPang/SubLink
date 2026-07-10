@@ -10,6 +10,13 @@ import { copyText } from "@/lib/copy";
 import { formatDateTime, formatExpiresAt, formatClientName, statusText } from "@/lib/utils";
 import type { SubscriptionData } from "@/types/user";
 
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  return `${(value / 1024 ** index).toFixed(index > 2 ? 2 : 1)} ${units[index]}`;
+}
+
 export function SubscriptionCards({ data, onReset }: { data: SubscriptionData; onReset: () => void }) {
   const [qrOpen, setQrOpen] = useState(false);
   const [qrCode, setQrCode] = useState("");
@@ -66,6 +73,27 @@ export function SubscriptionCards({ data, onReset }: { data: SubscriptionData; o
           </CardContent>
         </Card>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>订阅流量</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data.usage ? (
+            <div className="space-y-4">
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-foreground transition-all" style={{ width: `${Math.min(100, data.usage.total ? data.usage.used / data.usage.total * 100 : 0)}%` }} />
+              </div>
+              <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div><div className="text-muted-foreground">已用流量</div><div className="mt-1 font-medium">{formatBytes(data.usage.used)}</div></div>
+                <div><div className="text-muted-foreground">剩余流量</div><div className="mt-1 font-medium">{formatBytes(data.usage.remaining)}</div></div>
+                <div><div className="text-muted-foreground">总流量</div><div className="mt-1 font-medium">{formatBytes(data.usage.total)}</div></div>
+                <div><div className="text-muted-foreground">套餐到期</div><div className="mt-1 font-medium">{data.usage.expire ? formatDateTime(new Date(data.usage.expire * 1000).toISOString()) : "未提供"}</div></div>
+              </div>
+              <div className="text-xs text-muted-foreground">数据更新时间：{formatDateTime(data.usage.updatedAt)}</div>
+            </div>
+          ) : <div className="text-sm text-muted-foreground">上游尚未返回 subscription-userinfo，成功检测或拉取一次上游订阅后会显示流量信息。</div>}
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>专用客户端订阅链接</CardTitle>

@@ -3,6 +3,7 @@ import type { Request } from "express";
 export type UserRole = "admin" | "user";
 export type UserStatus = "active" | "disabled";
 export type AccessStatus = "success" | "failed";
+export type UpstreamHealthStatus = "unknown" | "healthy" | "unhealthy";
 
 export interface UserRecord {
   id: number;
@@ -40,6 +41,11 @@ export interface UpstreamRecord {
   client: string;
   url: string;
   enabled: 0 | 1;
+  health_status: UpstreamHealthStatus;
+  last_checked_at: string | null;
+  last_latency_ms: number | null;
+  last_error: string;
+  subscription_userinfo: string;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +55,11 @@ export interface Upstream {
   client: string;
   url: string;
   enabled: boolean;
+  healthStatus: UpstreamHealthStatus;
+  lastCheckedAt: string | null;
+  lastLatencyMs: number | null;
+  lastError: string;
+  subscriptionUserinfo: string;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +97,37 @@ export interface AccessLogRecord {
 
 export interface AccessLogWithLocation extends AccessLogRecord {
   ipLocation: string;
+}
+
+export interface AccessLogQuery {
+  page?: number;
+  pageSize?: number;
+  username?: string;
+  client?: string;
+  status?: AccessStatus;
+  keyword?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface PaginatedAccessLogs {
+  items: AccessLogRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AdminAuditLogRecord {
+  id: number;
+  admin_user_id: number | null;
+  admin_username: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  details: string;
+  ip: string;
+  user_agent: string;
+  created_at: string;
 }
 
 export interface AppConfig {

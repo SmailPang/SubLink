@@ -136,6 +136,11 @@ export function subscriptionRoutes(store: Store) {
 
           if (!remote.ok) throw new Error("converter failed");
           const text = await remote.text();
+          store.updateUpstreamHealth(upstream.client, {
+            status: "healthy",
+            latencyMs: Date.now() - started,
+            subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? ""
+          });
           applyUpstreamHeaders(remote, res, siteName);
           store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
           return res.send(text);
@@ -148,6 +153,11 @@ export function subscriptionRoutes(store: Store) {
         });
         if (!remote.ok) throw new Error("bad upstream");
         const text = await remote.text();
+        store.updateUpstreamHealth(upstream.client, {
+          status: "healthy",
+          latencyMs: Date.now() - started,
+          subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? ""
+        });
         applyUpstreamHeaders(remote, res, siteName);
         store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return res.send(text);
@@ -155,7 +165,14 @@ export function subscriptionRoutes(store: Store) {
 
       store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
       return res.type("text/plain").send(sampleSubscription(user.username, client));
-    } catch {
+    } catch (error) {
+      if (upstream) {
+        store.updateUpstreamHealth(upstream.client, {
+          status: "unhealthy",
+          latencyMs: Date.now() - started,
+          error: error instanceof Error ? error.message : "上游请求失败"
+        });
+      }
       store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "failed", response_time_ms: Date.now() - started });
       return res.status(502).type("text/plain").send("上游链接不可用");
     }

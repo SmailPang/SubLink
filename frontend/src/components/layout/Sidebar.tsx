@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import type { ComponentType } from "react";
-import { Activity, Bell, Gauge, Link2, ListChecks, Megaphone, Settings, User, Users, Workflow } from "lucide-react";
+import { Activity, Bell, Gauge, Link2, ListChecks, Megaphone, Settings, ShieldCheck, User, Users, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { UserRole } from "@/types/user";
 import { buildInfo } from "@/generated/build-info";
@@ -24,6 +24,7 @@ const adminItems: NavItem[] = [
   { to: "/admin/announcements", label: "公告管理", icon: Megaphone },
   { to: "/admin/upstreams", label: "上游配置", icon: Workflow },
   { to: "/admin/logs", label: "访问日志", icon: Activity },
+  { to: "/admin/audit-logs", label: "操作审计", icon: ShieldCheck },
   { to: "/admin/settings", label: "系统设置", icon: Settings }
 ];
 

@@ -56,6 +56,8 @@ database_id = "替换为你的 D1 database_id"
 npm run cf:d1:migrate:remote
 ```
 
+升级到 1.4.0 时必须先应用 `0003_operations.sql`，再部署新版 Pages Functions。该迁移会增加上游健康信息和管理员操作审计表；请求链路不再重复执行建表和客户端种子逻辑。
+
 ## 5. 本地 Cloudflare 模式测试
 
 先初始化本地 D1：

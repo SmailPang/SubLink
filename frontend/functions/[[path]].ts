@@ -41,6 +41,11 @@ type UpstreamRecord = {
   client: string;
   url: string;
   enabled: 0 | 1;
+  health_status: "unknown" | "healthy" | "unhealthy";
+  last_checked_at: string | null;
+  last_latency_ms: number | null;
+  last_error: string;
+  subscription_userinfo: string;
   created_at: string;
   updated_at: string;
 };
@@ -65,6 +70,19 @@ type AnnouncementRecord = {
   created_at: string;
 };
 
+type AdminAuditLogRecord = {
+  id: number;
+  admin_user_id: number | null;
+  admin_username: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  details: string;
+  ip: string;
+  user_agent: string;
+  created_at: string;
+};
+
 const clients = [
   { client: "default", name: "默认" },
   { client: "clash", name: "Clash" },
@@ -81,66 +99,6 @@ const clients = [
 
 const userVisibleClients = clients.filter((item) => item.client !== "default" && item.client !== "v2ray");
 const passthroughHeaders = ["subscription-userinfo", "profile-update-interval", "profile-web-page-url", "support-url", "profile-title", "content-disposition"];
-let schemaReady = false;
-
-const schemaStatements = [
-`CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  password_salt TEXT NOT NULL,
-  role TEXT NOT NULL CHECK(role IN ('admin', 'user')),
-  status TEXT NOT NULL CHECK(status IN ('active', 'disabled')),
-  expires_at TEXT NOT NULL,
-  remark TEXT NOT NULL DEFAULT '',
-  token TEXT NOT NULL UNIQUE,
-  last_client TEXT,
-  last_access_at TEXT,
-  must_change_password INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)`,
-`CREATE TABLE IF NOT EXISTS upstreams (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  client TEXT NOT NULL UNIQUE,
-  url TEXT NOT NULL DEFAULT '',
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)`,
-`CREATE TABLE IF NOT EXISTS access_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER,
-  username TEXT NOT NULL,
-  client TEXT NOT NULL,
-  ip TEXT NOT NULL,
-  ip_location TEXT NOT NULL DEFAULT '',
-  user_agent TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('success', 'failed')),
-  response_time_ms INTEGER NOT NULL,
-  accessed_at TEXT NOT NULL
-)`,
-`CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)`,
-`CREATE TABLE IF NOT EXISTS announcements (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at TEXT NOT NULL
-)`,
-`CREATE TABLE IF NOT EXISTS announcement_reads (
-  announcement_id INTEGER NOT NULL,
-  user_id INTEGER NOT NULL,
-  read_at TEXT NOT NULL,
-  PRIMARY KEY (announcement_id, user_id)
-)`,
-"CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id)",
-"CREATE INDEX IF NOT EXISTS idx_access_logs_accessed_at ON access_logs(accessed_at)",
-"CREATE INDEX IF NOT EXISTS idx_announcement_reads_user_id ON announcement_reads(user_id)"
-];
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -309,49 +267,27 @@ function requestLocation(request: Request, ip: string) {
   return "未知";
 }
 
-async function seed(env: Env) {
+async function ensureBootstrapUsers(env: Env) {
   if (!env.DB) throw new Error("D1 数据库未绑定，请在 Cloudflare Pages 中绑定 DB");
-  if (!schemaReady) {
-    for (const statement of schemaStatements) {
-      await env.DB.prepare(statement).run();
-    }
-    const userColumns = await env.DB.prepare("PRAGMA table_info(users)").all<{ name: string }>();
-    if (!(userColumns.results ?? []).some((column) => column.name === "must_change_password")) {
-      await env.DB.prepare("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0").run();
-    }
-    schemaReady = true;
+  const userColumns = await env.DB.prepare("PRAGMA table_info(users)").all<{ name: string }>();
+  if (!(userColumns.results ?? []).some((column) => column.name === "must_change_password")) {
+    await env.DB.prepare("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0").run();
   }
-  const time = now();
-  const upstreams = clients.map((item) => env.DB.prepare("INSERT OR IGNORE INTO upstreams (client, url, enabled, created_at, updated_at) VALUES (?, '', 1, ?, ?)").bind(item.client, time, time));
-  await env.DB.batch(upstreams);
-
   const userCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>();
-  if ((userCount?.count ?? 0) === 0) {
-    const password = await hashPassword("admin123");
-    await env.DB.prepare(`
-      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, created_at, updated_at)
-      VALUES (?, ?, ?, 'admin', 'active', ?, ?, ?, ?, ?)
-    `).bind("admin", password.hash, password.salt, "2099-12-31T23:59:59.000Z", "Cloudflare 默认管理员", token(), time, time).run();
-
-    const userPassword = await hashPassword("user123");
-    await env.DB.prepare(`
-      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, created_at, updated_at)
-      VALUES (?, ?, ?, 'user', 'active', ?, ?, ?, ?, ?)
-    `).bind("user", userPassword.hash, userPassword.salt, futureDate(), "Cloudflare 默认用户", token(), time, time).run();
-  } else {
-    await env.DB.prepare(`
-      DELETE FROM users
-      WHERE username = 'admin'
-        AND remark = 'Cloudflare 默认管理员'
-        AND (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1
-    `).run();
-    await env.DB.prepare(`
-      DELETE FROM users
-      WHERE username = 'user'
-        AND remark = 'Cloudflare 默认用户'
-        AND (SELECT COUNT(*) FROM users WHERE role = 'user') > 1
-    `).run();
-  }
+  if ((userCount?.count ?? 0) > 0) return;
+  const time = now();
+  const password = await hashPassword("admin123");
+  const userPassword = await hashPassword("user123");
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
+      VALUES (?, ?, ?, 'admin', 'active', ?, ?, ?, 1, ?, ?)
+    `).bind("admin", password.hash, password.salt, "2099-12-31T23:59:59.000Z", "Cloudflare 默认管理员", token(), time, time),
+    env.DB.prepare(`
+      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
+      VALUES (?, ?, ?, 'user', 'active', ?, ?, ?, 1, ?, ?)
+    `).bind("user", userPassword.hash, userPassword.salt, futureDate(), "Cloudflare 默认用户", token(), time, time)
+  ]);
 }
 
 async function bodyJson<T>(request: Request) {
@@ -416,6 +352,94 @@ function logRow(row: AccessLogRecord) {
   };
 }
 
+function upstreamRow(row: UpstreamRecord) {
+  return {
+    id: row.id,
+    client: row.client,
+    url: row.url,
+    enabled: Boolean(row.enabled),
+    healthStatus: row.health_status,
+    lastCheckedAt: row.last_checked_at,
+    lastLatencyMs: row.last_latency_ms,
+    lastError: row.last_error,
+    subscriptionUserinfo: row.subscription_userinfo,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+function parseSubscriptionUserinfo(value?: string | null, updatedAt?: string | null) {
+  if (!value) return null;
+  const fields = Object.fromEntries(value.split(";").map((part) => part.trim().split("=")).filter((item) => item.length === 2));
+  const upload = Number(fields.upload ?? 0);
+  const download = Number(fields.download ?? 0);
+  const total = Number(fields.total ?? 0);
+  const expireValue = fields.expire ? Number(fields.expire) : null;
+  if (![upload, download, total].every(Number.isFinite) || total <= 0) return null;
+  const used = upload + download;
+  return { upload, download, used, total, remaining: Math.max(0, total - used), expire: expireValue && Number.isFinite(expireValue) ? expireValue : null, updatedAt: updatedAt ?? null };
+}
+
+async function updateUpstreamHealth(env: Env, client: string, input: { status: "healthy" | "unhealthy"; latencyMs: number; error?: string; subscriptionUserinfo?: string }) {
+  const time = now();
+  await env.DB.prepare(`
+    UPDATE upstreams SET health_status = ?, last_checked_at = ?, last_latency_ms = ?, last_error = ?,
+      subscription_userinfo = CASE WHEN ? != '' THEN ? ELSE subscription_userinfo END
+    WHERE client = ?
+  `).bind(input.status, time, input.latencyMs, input.error ?? "", input.subscriptionUserinfo ?? "", input.subscriptionUserinfo ?? "", client).run();
+  return env.DB.prepare("SELECT * FROM upstreams WHERE client = ?").bind(client).first<UpstreamRecord>();
+}
+
+async function checkUpstreamHealth(env: Env, upstream: UpstreamRecord) {
+  if (!upstream.url) return updateUpstreamHealth(env, upstream.client, { status: "unhealthy", latencyMs: 0, error: "未配置上游链接" });
+  const started = Date.now();
+  try {
+    const response = await fetch(upstream.url, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: response.headers.get("subscription-userinfo") ?? "" });
+    await response.body?.cancel();
+    return result;
+  } catch (error) {
+    return updateUpstreamHealth(env, upstream.client, { status: "unhealthy", latencyMs: Date.now() - started, error: error instanceof Error ? error.message : "上游链接不可用" });
+  }
+}
+
+async function writeAdminAudit(env: Env, request: Request, admin: UserRecord, action: string, targetType: string, targetId = "", details: unknown = {}) {
+  await env.DB.prepare(`
+    INSERT INTO admin_audit_logs (admin_user_id, admin_username, action, target_type, target_id, details, ip, user_agent, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(admin.id, admin.username, action, targetType, targetId, JSON.stringify(details), requestIp(request), request.headers.get("user-agent") ?? "", now()).run();
+}
+
+async function queryAccessLogs(request: Request, env: Env, userId?: number) {
+  const params = new URL(request.url).searchParams;
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const pageSize = Math.min(100, Math.max(10, Number(params.get("pageSize")) || 20));
+  const where: string[] = [];
+  const values: unknown[] = [];
+  if (userId) { where.push("access_logs.user_id = ?"); values.push(userId); }
+  const username = params.get("username")?.trim();
+  if (username) { where.push("COALESCE(users.username, access_logs.username) LIKE ?"); values.push(`%${username}%`); }
+  const client = params.get("client")?.trim();
+  if (client) { where.push("access_logs.client = ?"); values.push(client); }
+  const status = params.get("status");
+  if (status === "success" || status === "failed") { where.push("access_logs.status = ?"); values.push(status); }
+  const keyword = params.get("keyword")?.trim();
+  if (keyword) { where.push("(access_logs.ip LIKE ? OR access_logs.user_agent LIKE ?)"); values.push(`%${keyword}%`, `%${keyword}%`); }
+  const from = params.get("from");
+  if (from) { where.push("access_logs.accessed_at >= ?"); values.push(from); }
+  const to = params.get("to");
+  if (to) { where.push("access_logs.accessed_at <= ?"); values.push(to); }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const baseFrom = "FROM access_logs LEFT JOIN users ON users.id = access_logs.user_id";
+  const total = await env.DB.prepare(`SELECT COUNT(*) AS count ${baseFrom} ${whereSql}`).bind(...values).first<{ count: number }>();
+  const rows = await env.DB.prepare(`
+    SELECT access_logs.*, COALESCE(users.username, access_logs.username) AS username
+    ${baseFrom} ${whereSql} ORDER BY access_logs.id DESC LIMIT ? OFFSET ?
+  `).bind(...values, pageSize, (page - 1) * pageSize).all<AccessLogRecord>();
+  return { items: (rows.results ?? []).map(logRow), total: total?.count ?? 0, page, pageSize };
+}
+
 function subOrigin(request: Request, settings: Record<string, string>) {
   return (settings.publicBaseUrl || new URL(request.url).origin).replace(/\/+$/, "");
 }
@@ -453,7 +477,6 @@ ss://YWVzLTEyOC1nY206c3VibGluay1jbG91ZGZsYXJlQDEyNy4wLjAuMTo4Mzg4#${label}
 }
 
 async function handleApi(request: Request, env: Env, path: string) {
-  await seed(env);
   const method = request.method.toUpperCase();
 
   if (path === "/api/health") return json({ status: "ok", message: "服务正常" });
@@ -463,6 +486,7 @@ async function handleApi(request: Request, env: Env, path: string) {
   }
 
   if (path === "/api/auth/login" && method === "POST") {
+    await ensureBootstrapUsers(env);
     const input = await bodyJson<{ username?: string; password?: string; turnstileToken?: string }>(request);
     if (!(await verifyTurnstileToken(input.turnstileToken ?? "", env, request))) return json({ message: "人机验证失败，请重试" }, 403);
     const user = input.username ? await env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(input.username).first<UserRecord>() : null;
@@ -487,6 +511,7 @@ async function handleApi(request: Request, env: Env, path: string) {
       const origin = subOrigin(request, settings);
       const upstreamRows = await env.DB.prepare("SELECT * FROM upstreams ORDER BY id").all<UpstreamRecord>();
       const upstreams = upstreamRows.results ?? [];
+      const usageUpstream = upstreams.find((row) => row.enabled && row.subscription_userinfo);
       return json({
         user: publicUser(user),
         genericLink: `${origin}/sub/${user.token}`,
@@ -501,6 +526,7 @@ async function handleApi(request: Request, env: Env, path: string) {
             enabled: true
           }];
         }),
+        usage: parseSubscriptionUserinfo(usageUpstream?.subscription_userinfo, usageUpstream?.last_checked_at),
         instructions: [
           "推荐优先使用通用订阅链接。",
           "如果客户端无法自动识别，请使用对应客户端专用链接。",
@@ -516,8 +542,7 @@ async function handleApi(request: Request, env: Env, path: string) {
     }
 
     if (path === "/api/user/logs") {
-      const rows = await env.DB.prepare("SELECT * FROM access_logs WHERE user_id = ? ORDER BY id DESC LIMIT 200").bind(user.id).all<AccessLogRecord>();
-      return json({ items: (rows.results ?? []).map(logRow) });
+      return json(await queryAccessLogs(request, env, user.id));
     }
 
     if (path === "/api/user/announcements") {
@@ -580,10 +605,26 @@ async function handleApi(request: Request, env: Env, path: string) {
     if (auth.error) return auth.error;
 
     if (path === "/api/admin/dashboard") {
+      const today = new Date().toISOString().slice(0, 10);
       const totalUsers = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>();
       const activeUsers = await env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE status = 'active'").first<{ count: number }>();
       const disabledUsers = await env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE status = 'disabled'").first<{ count: number }>();
-      const todayRequests = await env.DB.prepare("SELECT COUNT(*) AS count FROM access_logs WHERE accessed_at LIKE ?").bind(`${new Date().toISOString().slice(0, 10)}%`).first<{ count: number }>();
+      const todayMetrics = await env.DB.prepare(`
+        SELECT COUNT(*) AS requests,
+          SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
+          COALESCE(AVG(response_time_ms), 0) AS average_response_ms,
+          COUNT(DISTINCT user_id) AS active_users
+        FROM access_logs WHERE accessed_at LIKE ?
+      `).bind(`${today}%`).first<{ requests: number; success: number; average_response_ms: number; active_users: number }>();
+      const expiringSoon = await env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'user' AND status = 'active' AND expires_at BETWEEN ? AND ?")
+        .bind(now(), new Date(Date.now() + 7 * 86400000).toISOString()).first<{ count: number }>();
+      const upstreamSummary = await env.DB.prepare("SELECT health_status AS status, COUNT(*) AS count FROM upstreams WHERE enabled = 1 GROUP BY health_status").all<{ status: string; count: number }>();
+      const dailyTrend = await env.DB.prepare(`
+        SELECT substr(accessed_at, 1, 10) AS date, COUNT(*) AS requests,
+          SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success
+        FROM access_logs WHERE accessed_at >= ? GROUP BY substr(accessed_at, 1, 10) ORDER BY date
+      `).bind(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10)).all<{ date: string; requests: number; success: number }>();
+      const clientStats = await env.DB.prepare("SELECT client, COUNT(*) AS count FROM access_logs GROUP BY client ORDER BY count DESC LIMIT 6").all<{ client: string; count: number }>();
       const recentLogs = await env.DB.prepare(`
         SELECT access_logs.*, COALESCE(users.username, access_logs.username) AS username
         FROM access_logs
@@ -591,7 +632,23 @@ async function handleApi(request: Request, env: Env, path: string) {
         ORDER BY access_logs.id DESC
         LIMIT 8
       `).all<AccessLogRecord>();
-      return json({ totalUsers: totalUsers?.count ?? 0, activeUsers: activeUsers?.count ?? 0, disabledUsers: disabledUsers?.count ?? 0, todayRequests: todayRequests?.count ?? 0, recentLogs: (recentLogs.results ?? []).map(logRow) });
+      const todayRequests = todayMetrics?.requests ?? 0;
+      const todaySuccess = todayMetrics?.success ?? 0;
+      return json({
+        totalUsers: totalUsers?.count ?? 0,
+        activeUsers: activeUsers?.count ?? 0,
+        disabledUsers: disabledUsers?.count ?? 0,
+        todayRequests,
+        todaySuccess,
+        todayFailed: todayRequests - todaySuccess,
+        averageResponseMs: Math.round(todayMetrics?.average_response_ms ?? 0),
+        activeToday: todayMetrics?.active_users ?? 0,
+        expiringSoon: expiringSoon?.count ?? 0,
+        upstreamSummary: upstreamSummary.results ?? [],
+        dailyTrend: dailyTrend.results ?? [],
+        clientStats: clientStats.results ?? [],
+        recentLogs: (recentLogs.results ?? []).map(logRow)
+      });
     }
 
     if (path === "/api/admin/announcements") {
@@ -610,6 +667,7 @@ async function handleApi(request: Request, env: Env, path: string) {
         const announcement = id
           ? await env.DB.prepare("SELECT * FROM announcements WHERE id = ?").bind(id).first<AnnouncementRecord>()
           : await env.DB.prepare("SELECT * FROM announcements ORDER BY id DESC LIMIT 1").first<AnnouncementRecord>();
+        await writeAdminAudit(env, request, auth.user, "announcement.create", "announcement", String(announcement?.id ?? ""), { title: input.title.trim() });
         return json({ announcement: announcementRow(announcement!), message: "创建成功" }, 201);
       }
     }
@@ -619,6 +677,7 @@ async function handleApi(request: Request, env: Env, path: string) {
       const id = Number(adminAnnouncementMatch[1]);
       await env.DB.prepare("DELETE FROM announcement_reads WHERE announcement_id = ?").bind(id).run();
       await env.DB.prepare("DELETE FROM announcements WHERE id = ?").bind(id).run();
+      await writeAdminAudit(env, request, auth.user, "announcement.delete", "announcement", String(id));
       return json({ message: "删除成功" });
     }
 
@@ -637,8 +696,28 @@ async function handleApi(request: Request, env: Env, path: string) {
           VALUES (?, ?, ?, ?, 'active', ?, ?, ?, 1, ?, ?)
         `).bind(input.username, hashed.hash, hashed.salt, input.role ?? "user", input.expiresAt ?? futureDate(), input.remark ?? "", token(), time, time).run();
         const user = await env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(input.username).first<UserRecord>();
+        await writeAdminAudit(env, request, auth.user, "user.create", "user", String(user?.id ?? ""), { username: input.username, role: input.role ?? "user" });
         return json({ user: publicUser(user!) }, 201);
       }
+    }
+
+    if (path === "/api/admin/users/batch" && method === "POST") {
+      const input = await bodyJson<{ ids?: number[]; action?: "enable" | "disable" | "delete" | "extend"; days?: number }>(request);
+      const ids = [...new Set((input.ids ?? []).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 500);
+      if (!ids.length || !input.action || (input.action === "extend" && (!input.days || input.days < 1))) return json({ message: "批量操作参数不完整" }, 400);
+      const placeholders = ids.map(() => "?").join(",");
+      let statement: D1PreparedStatement;
+      if (input.action === "delete") {
+        statement = env.DB.prepare(`DELETE FROM users WHERE id IN (${placeholders}) AND role != 'admin'`).bind(...ids);
+      } else if (input.action === "extend") {
+        statement = env.DB.prepare(`UPDATE users SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, ?), updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`).bind(`+${input.days} days`, now(), ...ids);
+      } else {
+        statement = env.DB.prepare(`UPDATE users SET status = ?, updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`).bind(input.action === "enable" ? "active" : "disabled", now(), ...ids);
+      }
+      const result = await statement.run();
+      const affected = Number((result.meta as { changes?: number }).changes ?? ids.length);
+      await writeAdminAudit(env, request, auth.user, `user.batch.${input.action}`, "user", ids.join(","), { affected, days: input.days });
+      return json({ affected, message: `已处理 ${affected} 个用户` });
     }
 
     const userMatch = /^\/api\/admin\/users\/(\d+)(?:\/([a-z-]+))?$/.exec(path);
@@ -656,23 +735,28 @@ async function handleApi(request: Request, env: Env, path: string) {
         await env.DB.prepare("UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, updated_at = ? WHERE id = ?")
           .bind(input.username ?? old.username, input.expiresAt ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, now(), id).run();
         const user = await getUserById(env, id);
+        await writeAdminAudit(env, request, auth.user, "user.update", "user", String(id), input);
         return json({ user: publicUser(user!) });
       }
       if (!action && method === "DELETE") {
         await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+        await writeAdminAudit(env, request, auth.user, "user.delete", "user", String(id));
         return json({ message: "删除成功" });
       }
       if (action === "enable" && method === "POST") {
         await env.DB.prepare("UPDATE users SET status = 'active', updated_at = ? WHERE id = ?").bind(now(), id).run();
+        await writeAdminAudit(env, request, auth.user, "user.enable", "user", String(id));
         return json({ user: publicUser((await getUserById(env, id))!) });
       }
       if (action === "disable" && method === "POST") {
         await env.DB.prepare("UPDATE users SET status = 'disabled', updated_at = ? WHERE id = ?").bind(now(), id).run();
+        await writeAdminAudit(env, request, auth.user, "user.disable", "user", String(id));
         return json({ user: publicUser((await getUserById(env, id))!) });
       }
       if (action === "reset-token" && method === "POST") {
         const next = token();
         await env.DB.prepare("UPDATE users SET token = ?, updated_at = ? WHERE id = ?").bind(next, now(), id).run();
+        await writeAdminAudit(env, request, auth.user, "user.reset_token", "user", String(id));
         return json({ token: next, message: "操作成功" });
       }
       if (action === "password" && method === "POST") {
@@ -680,6 +764,7 @@ async function handleApi(request: Request, env: Env, path: string) {
         if (!input.password || input.password.length < 6) return json({ message: "密码不能少于 6 位" }, 400);
         const hashed = await hashPassword(input.password);
         await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, updated_at = ? WHERE id = ?").bind(hashed.hash, hashed.salt, now(), id).run();
+        await writeAdminAudit(env, request, auth.user, "user.password", "user", String(id));
         return json({ message: "保存成功" });
       }
     }
@@ -691,17 +776,31 @@ async function handleApi(request: Request, env: Env, path: string) {
         const time = now();
         await env.DB.batch(input.items.map((item) => env.DB.prepare(`
           INSERT INTO upstreams (client, url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(client) DO UPDATE SET url = excluded.url, enabled = excluded.enabled, updated_at = excluded.updated_at
+          ON CONFLICT(client) DO UPDATE SET
+            health_status = CASE WHEN upstreams.url != excluded.url THEN 'unknown' ELSE upstreams.health_status END,
+            last_checked_at = CASE WHEN upstreams.url != excluded.url THEN NULL ELSE upstreams.last_checked_at END,
+            last_latency_ms = CASE WHEN upstreams.url != excluded.url THEN NULL ELSE upstreams.last_latency_ms END,
+            last_error = CASE WHEN upstreams.url != excluded.url THEN '' ELSE upstreams.last_error END,
+            subscription_userinfo = CASE WHEN upstreams.url != excluded.url THEN '' ELSE upstreams.subscription_userinfo END,
+            url = excluded.url, enabled = excluded.enabled, updated_at = excluded.updated_at
         `).bind(item.client, item.url ?? "", item.enabled === false ? 0 : 1, time, time)));
+        await writeAdminAudit(env, request, auth.user, "upstream.save_all", "upstream", "", { count: input.items.length });
       }
 
       const rows = await env.DB.prepare("SELECT * FROM upstreams ORDER BY id").all<UpstreamRecord>();
       const upstreams = rows.results ?? [];
       const items = clients.map((item) => {
         const row = upstreams.find((value) => value.client === item.client);
-        return row ? { ...row, enabled: Boolean(row.enabled) } : { id: 0, client: item.client, url: "", enabled: true, created_at: now(), updated_at: now() };
+        return row ? upstreamRow(row) : { id: 0, client: item.client, url: "", enabled: true, healthStatus: "unknown", lastCheckedAt: null, lastLatencyMs: null, lastError: "", subscriptionUserinfo: "", created_at: now(), updated_at: now() };
       });
       return json(method === "PUT" ? { items, message: "保存成功" } : { items });
+    }
+
+    if (path === "/api/admin/upstreams/health-check" && method === "POST") {
+      const rows = await env.DB.prepare("SELECT * FROM upstreams WHERE enabled = 1 AND url != '' ORDER BY id").all<UpstreamRecord>();
+      const checked = await Promise.all((rows.results ?? []).map((item) => checkUpstreamHealth(env, item)));
+      await writeAdminAudit(env, request, auth.user, "upstream.health_check_all", "upstream", "", { count: checked.length });
+      return json({ items: checked.filter(Boolean).map((item) => upstreamRow(item!)), message: `已检测 ${checked.length} 个上游` });
     }
 
     const upstreamMatch = /^\/api\/admin\/upstreams\/([^/]+)(?:\/test)?$/.exec(path);
@@ -710,39 +809,54 @@ async function handleApi(request: Request, env: Env, path: string) {
       if (path.endsWith("/test") && method === "POST") {
         const upstream = await env.DB.prepare("SELECT * FROM upstreams WHERE client = ?").bind(client).first<UpstreamRecord>();
         if (!upstream?.url) return json({ message: "上游链接不可用" }, 400);
-        try {
-          const result = await fetch(upstream.url, { signal: AbortSignal.timeout(5000) });
-          return result.ok ? json({ message: "测试成功" }) : json({ message: "上游链接不可用" }, 400);
-        } catch {
-          return json({ message: "上游链接不可用" }, 400);
-        }
+        const checked = await checkUpstreamHealth(env, upstream);
+        await writeAdminAudit(env, request, auth.user, "upstream.health_check", "upstream", client, { status: checked?.health_status, latencyMs: checked?.last_latency_ms });
+        return checked?.health_status === "healthy" ? json({ upstream: upstreamRow(checked), message: "测试成功" }) : json({ upstream: checked ? upstreamRow(checked) : null, message: checked?.last_error || "上游链接不可用" }, 400);
       }
       if (method === "PUT") {
         const input = await bodyJson<{ url?: string; enabled?: boolean }>(request);
         const time = now();
         await env.DB.prepare(`
           INSERT INTO upstreams (client, url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(client) DO UPDATE SET url = excluded.url, enabled = excluded.enabled, updated_at = excluded.updated_at
+          ON CONFLICT(client) DO UPDATE SET
+            health_status = CASE WHEN upstreams.url != excluded.url THEN 'unknown' ELSE upstreams.health_status END,
+            last_checked_at = CASE WHEN upstreams.url != excluded.url THEN NULL ELSE upstreams.last_checked_at END,
+            last_latency_ms = CASE WHEN upstreams.url != excluded.url THEN NULL ELSE upstreams.last_latency_ms END,
+            last_error = CASE WHEN upstreams.url != excluded.url THEN '' ELSE upstreams.last_error END,
+            subscription_userinfo = CASE WHEN upstreams.url != excluded.url THEN '' ELSE upstreams.subscription_userinfo END,
+            url = excluded.url, enabled = excluded.enabled, updated_at = excluded.updated_at
         `).bind(client, input.url ?? "", input.enabled === false ? 0 : 1, time, time).run();
         const upstream = await env.DB.prepare("SELECT * FROM upstreams WHERE client = ?").bind(client).first<UpstreamRecord>();
-        return json({ upstream: { ...upstream, enabled: Boolean(upstream?.enabled) }, message: "保存成功" });
+        await writeAdminAudit(env, request, auth.user, "upstream.update", "upstream", client, { enabled: input.enabled !== false, hasUrl: Boolean(input.url) });
+        return json({ upstream: upstream ? upstreamRow(upstream) : null, message: "保存成功" });
       }
     }
 
     if (path === "/api/admin/logs") {
-      const rows = await env.DB.prepare(`
-        SELECT access_logs.*, COALESCE(users.username, access_logs.username) AS username
-        FROM access_logs
-        LEFT JOIN users ON users.id = access_logs.user_id
-        ORDER BY access_logs.id DESC
-        LIMIT 200
-      `).all<AccessLogRecord>();
-      return json({ items: (rows.results ?? []).map(logRow) });
+      if (method === "GET") return json(await queryAccessLogs(request, env));
+      if (method === "DELETE") {
+        const before = new URL(request.url).searchParams.get("before") ?? "";
+        if (!before || Number.isNaN(new Date(before).getTime())) return json({ message: "清理日期无效" }, 400);
+        const result = await env.DB.prepare("DELETE FROM access_logs WHERE accessed_at < ?").bind(before).run();
+        const deleted = Number((result.meta as { changes?: number }).changes ?? 0);
+        await writeAdminAudit(env, request, auth.user, "access_log.cleanup", "access_log", "", { before, deleted });
+        return json({ deleted, message: `已清理 ${deleted} 条日志` });
+      }
+    }
+
+    if (path === "/api/admin/audit-logs" && method === "GET") {
+      const rows = await env.DB.prepare("SELECT * FROM admin_audit_logs ORDER BY id DESC LIMIT 200").all<AdminAuditLogRecord>();
+      return json({ items: rows.results ?? [] });
     }
 
     if (path === "/api/admin/settings") {
       if (method === "GET") return json({ settings: await getSettings(env) });
-      if (method === "PUT") return json({ settings: await setSettings(env, await bodyJson<Record<string, string>>(request)), message: "保存成功" });
+      if (method === "PUT") {
+        const input = await bodyJson<Record<string, string>>(request);
+        const settings = await setSettings(env, input);
+        await writeAdminAudit(env, request, auth.user, "settings.update", "settings", "", { keys: Object.keys(input) });
+        return json({ settings, message: "保存成功" });
+      }
     }
   }
 
@@ -750,7 +864,6 @@ async function handleApi(request: Request, env: Env, path: string) {
 }
 
 async function handleSubscription(request: Request, env: Env, path: string) {
-  await seed(env);
   const started = Date.now();
   const parts = path.split("/").filter(Boolean);
   const tokenParam = parts[1];
@@ -811,8 +924,9 @@ async function handleSubscription(request: Request, env: Env, path: string) {
         responseHeaders.set("profile-title", siteName);
         responseHeaders.set("content-disposition", `attachment; filename=${siteName}`);
 
+        await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? "" });
         await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
-        return new Response(await remote.text(), { headers: responseHeaders });
+        return new Response(remote.body, { headers: responseHeaders });
       }
 
       // 否则直接代理上游
@@ -838,13 +952,15 @@ async function handleSubscription(request: Request, env: Env, path: string) {
       responseHeaders.set("profile-title", siteName);
       responseHeaders.set("content-disposition", `attachment; filename=${siteName}`);
 
+      await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? "" });
       await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
-      return new Response(await remote.text(), { headers: responseHeaders });
+      return new Response(remote.body, { headers: responseHeaders });
     }
 
     await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
     return text(sampleSubscription(user.username, client));
-  } catch {
+  } catch (error) {
+    if (upstream) await updateUpstreamHealth(env, upstream.client, { status: "unhealthy", latencyMs: Date.now() - started, error: error instanceof Error ? error.message : "上游请求失败" });
     await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "failed", response_time_ms: Date.now() - started });
     return text("上游链接不可用", 502);
   }

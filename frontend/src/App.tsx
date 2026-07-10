@@ -14,6 +14,7 @@ import { UserUpstreamsPage } from "@/pages/admin/UserUpstreamsPage";
 import { LogsPage } from "@/pages/admin/LogsPage";
 import { SettingsPage } from "@/pages/admin/SettingsPage";
 import { AnnouncementsManagePage } from "@/pages/admin/AnnouncementsManagePage";
+import { AuditLogsPage } from "@/pages/admin/AuditLogsPage";
 
 function ProtectedLayout() {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/admin/users/:id" element={<UserDetailPage />} />
           <Route path="/admin/upstreams" element={<UserUpstreamsPage />} />
           <Route path="/admin/logs" element={<LogsPage />} />
+          <Route path="/admin/audit-logs" element={<AuditLogsPage />} />
           <Route path="/admin/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/login" replace />} />

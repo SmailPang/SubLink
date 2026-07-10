@@ -1,7 +1,8 @@
-import type { AccessLog } from "@/types/log";
+import type { AccessLogQuery, AdminAuditLog, PaginatedAccessLogs } from "@/types/log";
 import type { Announcement, UserAnnouncement } from "@/types/announcement";
 import type { SubscriptionData, PublicUser } from "@/types/user";
 import type { Upstream } from "@/types/upstream";
+import type { DashboardData } from "@/types/dashboard";
 
 const TOKEN_KEY = "sublink_token";
 
@@ -33,6 +34,13 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+function queryString(input: object) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  const result = params.toString();
+  return result ? `?${result}` : "";
+}
+
 export const api = {
   async login(username: string, password: string, turnstileToken: string) {
     return request<{ token: string; user: PublicUser }>("/api/auth/login", {
@@ -53,10 +61,13 @@ export const api = {
     return request<{ token: string; message: string }>("/api/user/reset-token", { method: "POST" });
   },
   dashboard() {
-    return request<{ totalUsers: number; activeUsers: number; disabledUsers: number; todayRequests: number; recentLogs: AccessLog[] }>("/api/admin/dashboard");
+    return request<DashboardData>("/api/admin/dashboard");
   },
   users() {
     return request<{ items: PublicUser[] }>("/api/admin/users");
+  },
+  batchUsers(input: { ids: number[]; action: "enable" | "disable" | "delete" | "extend"; days?: number }) {
+    return request<{ affected: number; message: string }>("/api/admin/users/batch", { method: "POST", body: JSON.stringify(input) });
   },
   createUser(input: { username: string; password: string; expiresAt?: string; remark?: string }) {
     return request<{ user: PublicUser }>("/api/admin/users", { method: "POST", body: JSON.stringify(input) });
@@ -92,13 +103,22 @@ export const api = {
     return request<{ items: Upstream[]; message: string }>("/api/admin/upstreams", { method: "PUT", body: JSON.stringify({ items }) });
   },
   testUpstream(client: string) {
-    return request<{ message: string }>(`/api/admin/upstreams/${client}/test`, { method: "POST" });
+    return request<{ upstream: Upstream; message: string }>(`/api/admin/upstreams/${client}/test`, { method: "POST" });
   },
-  logs() {
-    return request<{ items: AccessLog[] }>("/api/admin/logs");
+  checkAllUpstreams() {
+    return request<{ items: Upstream[]; message: string }>("/api/admin/upstreams/health-check", { method: "POST" });
   },
-  ownLogs() {
-    return request<{ items: AccessLog[] }>("/api/user/logs");
+  logs(query: AccessLogQuery = {}) {
+    return request<PaginatedAccessLogs>(`/api/admin/logs${queryString(query)}`);
+  },
+  ownLogs(query: AccessLogQuery = {}) {
+    return request<PaginatedAccessLogs>(`/api/user/logs${queryString(query)}`);
+  },
+  cleanupLogs(before: string) {
+    return request<{ deleted: number; message: string }>(`/api/admin/logs${queryString({ before })}`, { method: "DELETE" });
+  },
+  auditLogs() {
+    return request<{ items: AdminAuditLog[] }>("/api/admin/audit-logs");
   },
   userAnnouncements() {
     return request<{ items: UserAnnouncement[] }>("/api/user/announcements");

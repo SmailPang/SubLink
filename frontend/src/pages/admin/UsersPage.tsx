@@ -25,11 +25,15 @@ export function UsersPage() {
   const [editingUser, setEditingUser] = useState<PublicUser | null>(null);
   const [passwordUser, setPasswordUser] = useState<PublicUser | null>(null);
   const [passwordForm, setPasswordForm] = useState({ password: "", confirmPassword: "" });
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [batchAction, setBatchAction] = useState<"enable" | "disable" | "delete" | "extend">("enable");
+  const [extendDays, setExtendDays] = useState(30);
 
   async function load() {
     setLoading(true);
     try {
       setUsers((await api.users()).items);
+      setSelectedIds([]);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载失败");
     } finally {
@@ -119,21 +123,37 @@ export function UsersPage() {
     }
   }
 
+  async function runBatch() {
+    if (!selectedIds.length) return toast.error("请先选择用户");
+    if (batchAction === "delete" && !window.confirm(`确认删除选中的 ${selectedIds.length} 个普通用户吗？`)) return;
+    try {
+      const result = await api.batchUsers({ ids: selectedIds, action: batchAction, days: batchAction === "extend" ? extendDays : undefined });
+      toast.success(result.message);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "批量操作失败");
+    }
+  }
+
+  const selectableUsers = users.filter((user) => user.role !== "admin");
+  const allSelected = selectableUsers.length > 0 && selectableUsers.every((user) => selectedIds.includes(user.id));
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">用户管理</h1>
-        <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />创建用户</Button>
+        <div className="flex flex-wrap gap-2"><select className="h-9 rounded-2xl border bg-background px-3 text-sm" value={batchAction} onChange={(event) => setBatchAction(event.target.value as typeof batchAction)}><option value="enable">批量启用</option><option value="disable">批量停用</option><option value="extend">批量续期</option><option value="delete">批量删除</option></select>{batchAction === "extend" && <Input className="w-24" type="number" min={1} value={extendDays} onChange={(event) => setExtendDays(Math.max(1, Number(event.target.value) || 1))} /> }<Button variant="outline" onClick={runBatch} disabled={!selectedIds.length}>执行（{selectedIds.length}）</Button><Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" />创建用户</Button></div>
       </div>
       <Card>
         <CardHeader><CardTitle>用户列表</CardTitle></CardHeader>
         <CardContent>
           {loading ? <Skeleton className="h-72" /> : users.length === 0 ? <div className="p-8 text-center text-muted-foreground">暂无用户数据</div> : (
             <Table>
-              <TableHeader><TableRow><TableHead>用户名</TableHead><TableHead>状态</TableHead><TableHead>到期时间</TableHead><TableHead>备注</TableHead><TableHead>最近访问时间</TableHead><TableHead>操作</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead><input type="checkbox" checked={allSelected} onChange={(event) => setSelectedIds(event.target.checked ? selectableUsers.map((user) => user.id) : [])} aria-label="选择全部普通用户" /></TableHead><TableHead>用户名</TableHead><TableHead>状态</TableHead><TableHead>到期时间</TableHead><TableHead>备注</TableHead><TableHead>最近访问时间</TableHead><TableHead>操作</TableHead></TableRow></TableHeader>
               <TableBody>
                 {users.map((user) => (
                   <TableRow key={user.id}>
+                    <TableCell><input type="checkbox" disabled={user.role === "admin"} checked={selectedIds.includes(user.id)} onChange={(event) => setSelectedIds((old) => event.target.checked ? [...old, user.id] : old.filter((id) => id !== user.id))} aria-label={`选择用户 ${user.username}`} /></TableCell>
                     <TableCell>{user.username}</TableCell>
                     <TableCell><Badge variant={user.status === "active" ? "secondary" : "destructive"}>{statusText(user.status, user.expiresAt, user.role)}</Badge></TableCell>
                     <TableCell>{formatExpiresAt(user.expiresAt, user.role)}</TableCell>
