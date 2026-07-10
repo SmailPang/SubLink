@@ -1,0 +1,11 @@
+name = "sublink-usage-cron"
+main = "cron.ts"
+compatibility_date = "2026-07-09"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sublink"
+database_id = "e78b70e5-9bd6-4f92-a758-f3ce6ddd92bc"

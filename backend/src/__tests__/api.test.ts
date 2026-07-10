@@ -628,17 +628,23 @@ describe("SubLink backend API", () => {
   });
 
   it("上游健康检测会保存流量信息并显示在我的订阅", async () => {
-    const upstreamUrl = await startUpstreamServer();
+    const upstream = await startInspectingUpstreamServer();
     const { app, token: adminToken } = await login("admin", "admin123");
-    await request(app).put("/api/admin/upstreams/clash").set("Authorization", `Bearer ${adminToken}`).send({ url: upstreamUrl, enabled: true });
+    await request(app).put("/api/admin/settings").set("Authorization", `Bearer ${adminToken}`).send({ usageRefreshUserAgent: "clash-verge/v2.5.1-test" });
+    await request(app).put("/api/admin/upstreams/clash").set("Authorization", `Bearer ${adminToken}`).send({ url: upstream.url, enabled: true });
 
     const health = await request(app).post("/api/admin/upstreams/clash/test").set("Authorization", `Bearer ${adminToken}`);
     expect(health.status).toBe(200);
     expect(health.body.upstream).toMatchObject({ healthStatus: "healthy", subscriptionUserinfo: expect.stringContaining("total=") });
+    expect(upstream.getUserAgent()).toBe("clash-verge/v2.5.1-test");
+
+    const refresh = await request(app).post("/api/admin/upstreams/refresh-usage").set("Authorization", `Bearer ${adminToken}`);
+    expect(refresh.status).toBe(200);
+    expect(refresh.body.refreshed).toBeGreaterThan(0);
 
     const userLogin = await request(app).post("/api/auth/login").send({ username: "user", password: "user123" });
     const subscription = await request(app).get("/api/user/subscription").set("Authorization", `Bearer ${userLogin.body.token}`);
-    expect(subscription.body.usage).toMatchObject({ upload: 1024, download: 2048, used: 3072, total: 107374182400 });
+    expect(subscription.body.usage).toMatchObject({ upload: 4096, download: 8192, used: 12288, total: 214748364800 });
   });
 
   it("支持批量管理用户、日志分页清理、操作审计和增强仪表盘", async () => {

@@ -58,6 +58,14 @@ npm run cf:d1:migrate:remote
 
 升级到 1.4.0 时必须先应用 `0003_operations.sql`，再部署新版 Pages Functions。该迁移会增加上游健康信息和管理员操作审计表；请求链路不再重复执行建表和客户端种子逻辑。
 
+流量定时刷新需要额外部署 Cron Worker：
+
+```powershell
+npm run cf:cron:deploy
+```
+
+Cron Worker 每 15 分钟运行一次，根据系统设置中的预设周期决定是否刷新。默认周期为 1 小时，请求头为 `clash-verge/v2.5.1`。Cloudflare Cron 使用 UTC 时间，并可能在配置后等待数分钟才完全生效。
+
 ## 5. 本地 Cloudflare 模式测试
 
 先初始化本地 D1：

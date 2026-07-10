@@ -5,6 +5,7 @@ import type { Store } from "../db.js";
 import { withIpLocation } from "../ipGeo.js";
 import { accessLogQuery } from "../logQuery.js";
 import type { AuthedRequest, Upstream } from "../types.js";
+import { refreshUsage, usageRefreshInterval, usageRefreshUserAgent } from "../usageRefresh.js";
 
 export function adminRoutes(store: Store) {
   const router = Router();
@@ -27,7 +28,7 @@ export function adminRoutes(store: Store) {
     if (!item.url) return store.updateUpstreamHealth(item.client, { status: "unhealthy", error: "未配置上游链接" });
     const started = Date.now();
     try {
-      const response = await fetch(item.url, { signal: AbortSignal.timeout(5000) });
+      const response = await fetch(item.url, { headers: { "user-agent": usageRefreshUserAgent(store.getSettings()) }, signal: AbortSignal.timeout(5000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = store.updateUpstreamHealth(item.client, {
         status: "healthy",
@@ -151,6 +152,12 @@ export function adminRoutes(store: Store) {
     return res.json({ items, message: `已检测 ${items.length} 个上游` });
   });
 
+  router.post("/upstreams/refresh-usage", async (req, res) => {
+    const result = await refreshUsage(store, true);
+    audit(req as AuthedRequest, "upstream.refresh_usage", "upstream", "", result);
+    return res.json({ ...result, message: `已刷新 ${result.refreshed} 个上游，失败 ${result.failed} 个` });
+  });
+
   router.put("/upstreams", (req, res) => {
     const parsed = z.object({
       items: z.array(z.object({
@@ -198,8 +205,12 @@ export function adminRoutes(store: Store) {
   router.get("/audit-logs", (_req, res) => res.json({ items: store.listAuditLogs() }));
   router.get("/settings", (_req, res) => res.json({ settings: store.getSettings() }));
   router.put("/settings", (req, res) => {
-    const settings = store.setSettings(req.body ?? {});
-    audit(req as AuthedRequest, "settings.update", "settings", "", { keys: Object.keys(req.body ?? {}) });
+    const input = { ...(req.body ?? {}) } as Record<string, string>;
+    if (input.usageRefreshIntervalMinutes !== undefined) input.usageRefreshIntervalMinutes = String(usageRefreshInterval(input));
+    if (input.usageRefreshUserAgent !== undefined) input.usageRefreshUserAgent = input.usageRefreshUserAgent.trim().slice(0, 512);
+    delete input.usageRefreshLastAt;
+    const settings = store.setSettings(input);
+    audit(req as AuthedRequest, "settings.update", "settings", "", { keys: Object.keys(input) });
     return res.json({ settings, message: "保存成功" });
   });
 

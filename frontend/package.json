@@ -1,6 +1,6 @@
 {
   "name": "sublink-frontend",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,9 @@
     "cf:d1:create": "wrangler d1 create sublink",
     "cf:d1:migrate:local": "wrangler d1 migrations apply sublink --local",
     "cf:d1:migrate:remote": "wrangler d1 migrations apply sublink --remote",
-    "cf:deploy": "npm run build && wrangler pages deploy dist"
+    "cf:deploy": "npm run build && wrangler pages deploy dist",
+    "cf:cron:deploy": "wrangler deploy --config wrangler.cron.toml",
+    "cf:cron:dev": "wrangler dev --config wrangler.cron.toml --test-scheduled"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

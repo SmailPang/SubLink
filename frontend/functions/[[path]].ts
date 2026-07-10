@@ -1,3 +1,5 @@
+import { refreshUpstreamUsage, usageRefreshInterval, usageRefreshUserAgent } from "./usageRefresh.js";
+
 type D1Result<T = unknown> = { results?: T[]; success: boolean; meta: unknown };
 type D1PreparedStatement = {
   bind(...values: unknown[]): D1PreparedStatement;
@@ -326,8 +328,12 @@ async function getSettings(env: Env) {
 }
 
 async function setSettings(env: Env, settings: Record<string, string>) {
+  const normalized = { ...settings };
+  if (normalized.usageRefreshIntervalMinutes !== undefined) normalized.usageRefreshIntervalMinutes = String(usageRefreshInterval(normalized));
+  if (normalized.usageRefreshUserAgent !== undefined) normalized.usageRefreshUserAgent = normalized.usageRefreshUserAgent.trim().slice(0, 512);
+  delete normalized.usageRefreshLastAt;
   const time = now();
-  await env.DB.batch(Object.entries(settings).map(([key, value]) => env.DB.prepare(`
+  await env.DB.batch(Object.entries(normalized).map(([key, value]) => env.DB.prepare(`
     INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `).bind(key, value ?? "", time)));
@@ -394,7 +400,8 @@ async function checkUpstreamHealth(env: Env, upstream: UpstreamRecord) {
   if (!upstream.url) return updateUpstreamHealth(env, upstream.client, { status: "unhealthy", latencyMs: 0, error: "未配置上游链接" });
   const started = Date.now();
   try {
-    const response = await fetch(upstream.url, { signal: AbortSignal.timeout(5000) });
+    const settings = await getSettings(env);
+    const response = await fetch(upstream.url, { headers: { "user-agent": usageRefreshUserAgent(settings) }, signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: response.headers.get("subscription-userinfo") ?? "" });
     await response.body?.cancel();
@@ -801,6 +808,12 @@ async function handleApi(request: Request, env: Env, path: string) {
       const checked = await Promise.all((rows.results ?? []).map((item) => checkUpstreamHealth(env, item)));
       await writeAdminAudit(env, request, auth.user, "upstream.health_check_all", "upstream", "", { count: checked.length });
       return json({ items: checked.filter(Boolean).map((item) => upstreamRow(item!)), message: `已检测 ${checked.length} 个上游` });
+    }
+
+    if (path === "/api/admin/upstreams/refresh-usage" && method === "POST") {
+      const result = await refreshUpstreamUsage(env.DB, true);
+      await writeAdminAudit(env, request, auth.user, "upstream.refresh_usage", "upstream", "", result);
+      return json({ ...result, message: `已刷新 ${result.refreshed} 个上游，失败 ${result.failed} 个` });
     }
 
     const upstreamMatch = /^\/api\/admin\/upstreams\/([^/]+)(?:\/test)?$/.exec(path);

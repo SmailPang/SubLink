@@ -11,7 +11,7 @@ const actionNames: Record<string, string> = {
   "user.create": "创建用户", "user.update": "修改用户", "user.enable": "启用用户", "user.disable": "停用用户",
   "user.delete": "删除用户", "user.reset_token": "重置 Token", "user.password": "修改密码",
   "user.batch.enable": "批量启用", "user.batch.disable": "批量停用", "user.batch.delete": "批量删除", "user.batch.extend": "批量续期",
-  "upstream.update": "修改上游", "upstream.save_all": "保存全部上游", "upstream.health_check": "检测上游", "upstream.health_check_all": "检测全部上游",
+  "upstream.update": "修改上游", "upstream.save_all": "保存全部上游", "upstream.health_check": "检测上游", "upstream.health_check_all": "检测全部上游", "upstream.refresh_usage": "刷新流量",
   "announcement.create": "创建公告", "announcement.delete": "删除公告", "settings.update": "修改系统设置", "access_log.cleanup": "清理访问日志"
 };
 

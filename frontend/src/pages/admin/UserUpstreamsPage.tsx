@@ -77,12 +77,22 @@ export function UserUpstreamsPage() {
     }
   }
 
+  async function refreshUsage() {
+    try {
+      const result = await api.refreshUsage();
+      await load();
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "刷新流量失败");
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>全局上游配置</CardTitle>
         <CardAction>
-          <div className="flex gap-2"><Button variant="outline" onClick={checkAll} disabled={loading || checking}>{checking ? "检测中" : "检测全部"}</Button><Button onClick={saveAll} disabled={loading || saving || !changed}>{saving ? "保存中" : changed ? "保存配置" : "已保存"}</Button></div>
+          <div className="flex gap-2"><Button variant="outline" onClick={checkAll} disabled={loading || checking}>{checking ? "检测中" : "检测全部"}</Button><Button variant="outline" onClick={refreshUsage} disabled={loading}>立即刷新流量</Button><Button onClick={saveAll} disabled={loading || saving || !changed}>{saving ? "保存中" : changed ? "保存配置" : "已保存"}</Button></div>
         </CardAction>
       </CardHeader>
       <CardContent>

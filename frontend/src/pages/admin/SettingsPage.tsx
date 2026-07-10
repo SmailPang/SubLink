@@ -8,6 +8,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 
+const usageRefreshPresets: Record<string, string> = {
+  "15": "每 15 分钟",
+  "30": "每 30 分钟",
+  "60": "每 1 小时",
+  "120": "每 2 小时",
+  "360": "每 6 小时",
+  "720": "每 12 小时",
+  "1440": "每天一次"
+};
+
 const subscriptionModeLabels: Record<string, string> = {
   proxy: "代理上游",
   redirect: "直跳上游"
@@ -32,6 +42,8 @@ export function SettingsPage() {
       subscriptionMode: "proxy", 
       remoteConfig: "none",
       converterUrl: "https://api.v1.mk/sub",
+      usageRefreshIntervalMinutes: "60",
+      usageRefreshUserAgent: "clash-verge/v2.5.1",
       ...result.settings 
     })).catch((error) => toast.error(error instanceof Error ? error.message : "加载失败"));
   }, []);
@@ -49,11 +61,25 @@ export function SettingsPage() {
 
   const currentSubscriptionMode = settings.subscriptionMode || "proxy";
   const currentRemoteConfig = settings.remoteConfig || "none";
+  const currentUsageRefreshInterval = settings.usageRefreshIntervalMinutes || "60";
 
   return (
     <Card>
       <CardHeader><CardTitle>系统设置</CardTitle></CardHeader>
       <CardContent className="max-w-xl space-y-4">
+        <div className="space-y-2">
+          <Label>流量刷新周期</Label>
+          <Select value={currentUsageRefreshInterval} onValueChange={(value) => setSettings({ ...settings, usageRefreshIntervalMinutes: value || "60" })}>
+            <SelectTrigger className="w-full"><SelectValue>{usageRefreshPresets[currentUsageRefreshInterval] || "每 1 小时"}</SelectValue></SelectTrigger>
+            <SelectContent>{Object.entries(usageRefreshPresets).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">仅提供预设周期。Cloudflare 定时任务每 15 分钟检查一次，到达周期后使用下方请求头刷新上游流量。</p>
+        </div>
+        <div className="space-y-2">
+          <Label>流量刷新请求头 User-Agent</Label>
+          <Input value={settings.usageRefreshUserAgent || ""} onChange={(event) => setSettings({ ...settings, usageRefreshUserAgent: event.target.value })} placeholder="clash-verge/v2.5.1" />
+          <p className="text-sm text-muted-foreground">用于定时流量刷新和“测试上游”。默认值：clash-verge/v2.5.1。</p>
+        </div>
         <div className="space-y-2">
           <Label>左上角标题</Label>
           <Input value={settings.siteName || ""} onChange={(event) => setSettings({ ...settings, siteName: event.target.value })} />

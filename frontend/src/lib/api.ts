@@ -108,6 +108,9 @@ export const api = {
   checkAllUpstreams() {
     return request<{ items: Upstream[]; message: string }>("/api/admin/upstreams/health-check", { method: "POST" });
   },
+  refreshUsage() {
+    return request<{ refreshed: number; failed: number; message: string }>("/api/admin/upstreams/refresh-usage", { method: "POST" });
+  },
   logs(query: AccessLogQuery = {}) {
     return request<PaginatedAccessLogs>(`/api/admin/logs${queryString(query)}`);
   },
