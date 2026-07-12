@@ -14,7 +14,7 @@ export interface Store {
   findUserByToken: (token: string) => UserRecord | undefined;
   listUsers: () => PublicUser[];
   updateUserStatus: (id: number, status: UserStatus) => PublicUser;
-  updateUser: (id: number, input: Partial<Pick<UserRecord, "username" | "expires_at" | "remark" | "status">>) => PublicUser;
+  updateUser: (id: number, input: Partial<Pick<UserRecord, "username" | "expires_at" | "remark" | "status" | "upstream_id" | "custom_upstream_url">>) => PublicUser;
   updateOwnProfile: (id: number, input: Pick<UserRecord, "username" | "remark">) => PublicUser;
   changePassword: (id: number, currentPassword: string, nextPassword: string) => void;
   forceChangePassword: (id: number, nextPassword: string) => void;
@@ -25,6 +25,9 @@ export interface Store {
   batchUsers: (ids: number[], action: "enable" | "disable" | "delete" | "extend", days?: number) => number;
   listUpstreams: () => Upstream[];
   saveUpstream: (client: string, url: string, enabled: boolean) => Upstream;
+  createUpstream: (input: { name: string; url: string; enabled: boolean }) => Upstream;
+  deleteUpstream: (id: number) => void;
+  findUpstreamById: (id: number) => Upstream | undefined;
   findUpstream: (client: string) => Upstream | undefined;
   updateUpstreamHealth: (client: string, input: { status: UpstreamHealthStatus; latencyMs?: number | null; error?: string; subscriptionUserinfo?: string }) => Upstream;
   listAnnouncements: () => Announcement[];
@@ -61,6 +64,7 @@ function toBoolUpstream(row: UpstreamRecord): Upstream {
   return {
     id: row.id,
     client: row.client,
+    name: row.name || row.client,
     url: row.url,
     enabled: Boolean(row.enabled),
     healthStatus: row.health_status,
@@ -104,6 +108,8 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       last_client TEXT,
       last_access_at TEXT,
       must_change_password INTEGER NOT NULL DEFAULT 0,
+      upstream_id INTEGER,
+      custom_upstream_url TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -111,6 +117,7 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
     CREATE TABLE IF NOT EXISTS upstreams (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       client TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL DEFAULT '',
       url TEXT NOT NULL DEFAULT '',
       enabled INTEGER NOT NULL DEFAULT 1,
       health_status TEXT NOT NULL DEFAULT 'unknown',
@@ -180,6 +187,8 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
   if (!userColumns.some((column) => column.name === "must_change_password")) {
     db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
   }
+  if (!userColumns.some((column) => column.name === "upstream_id")) db.exec("ALTER TABLE users ADD COLUMN upstream_id INTEGER");
+  if (!userColumns.some((column) => column.name === "custom_upstream_url")) db.exec("ALTER TABLE users ADD COLUMN custom_upstream_url TEXT NOT NULL DEFAULT ''");
 
   const upstreamColumns = db.prepare("PRAGMA table_info(upstreams)").all() as Array<{ name: string }>;
   const addUpstreamColumn = (name: string, definition: string) => {
@@ -190,6 +199,7 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
   addUpstreamColumn("last_latency_ms", "INTEGER");
   addUpstreamColumn("last_error", "TEXT NOT NULL DEFAULT ''");
   addUpstreamColumn("subscription_userinfo", "TEXT NOT NULL DEFAULT ''");
+  addUpstreamColumn("name", "TEXT NOT NULL DEFAULT ''");
 
   const createdAt = now();
   const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
@@ -252,6 +262,9 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
     lastClient: user.last_client,
     lastAccessAt: user.last_access_at,
     mustChangePassword: Boolean(user.must_change_password),
+    upstreamId: user.upstream_id,
+    customUpstreamUrl: user.custom_upstream_url || "",
+    upstreamName: user.upstream_id ? ((db.prepare("SELECT name FROM upstreams WHERE id = ?").get(user.upstream_id) as { name?: string } | undefined)?.name || null) : null,
     createdAt: user.created_at,
     updatedAt: user.updated_at
   });
@@ -309,9 +322,9 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       const old = getUser.get(id) as UserRecord | undefined;
       if (!old) throw new Error("用户不存在");
       db.prepare(`
-        UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, updated_at = ?
+        UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, upstream_id = ?, custom_upstream_url = ?, updated_at = ?
         WHERE id = ?
-      `).run(input.username ?? old.username, input.expires_at ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, now(), id);
+      `).run(input.username ?? old.username, input.expires_at ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, input.upstream_id === undefined ? old.upstream_id : input.upstream_id, input.custom_upstream_url ?? old.custom_upstream_url, now(), id);
       return publicUser(getUser.get(id) as UserRecord);
     },
     updateOwnProfile(id, input) {
@@ -391,6 +404,20 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
           url = excluded.url, enabled = excluded.enabled, updated_at = excluded.updated_at
       `).run(client, url, enabled ? 1 : 0, time, time);
       return toBoolUpstream(db.prepare("SELECT * FROM upstreams WHERE client = ?").get(client) as UpstreamRecord);
+    },
+    createUpstream(input) {
+      const time = now();
+      const key = `source-${nanoid(10)}`;
+      const result = db.prepare("INSERT INTO upstreams (client, name, url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(key, input.name, input.url, input.enabled ? 1 : 0, time, time);
+      return toBoolUpstream(db.prepare("SELECT * FROM upstreams WHERE id = ?").get(Number(result.lastInsertRowid)) as UpstreamRecord);
+    },
+    deleteUpstream(id) {
+      db.prepare("UPDATE users SET upstream_id = NULL WHERE upstream_id = ?").run(id);
+      db.prepare("DELETE FROM upstreams WHERE id = ?").run(id);
+    },
+    findUpstreamById(id) {
+      const row = db.prepare("SELECT * FROM upstreams WHERE id = ?").get(id) as UpstreamRecord | undefined;
+      return row ? toBoolUpstream(row) : undefined;
     },
     findUpstream(client) {
       const row = db.prepare("SELECT * FROM upstreams WHERE client = ?").get(client) as UpstreamRecord | undefined;
@@ -505,7 +532,8 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
         ORDER BY access_logs.id DESC
         LIMIT 8
       `).all() as AccessLogRecord[];
-      return { totalUsers, activeUsers, disabledUsers, todayRequests, todaySuccess, todayFailed, averageResponseMs, activeToday, expiringSoon, upstreamSummary, dailyTrend, clientStats, recentLogs };
+      const upstreams = (db.prepare("SELECT * FROM upstreams WHERE url != '' ORDER BY id").all() as UpstreamRecord[]).map(toBoolUpstream);
+      return { totalUsers, activeUsers, disabledUsers, todayRequests, todaySuccess, todayFailed, averageResponseMs, activeToday, expiringSoon, upstreamSummary, upstreams, dailyTrend, clientStats, recentLogs };
     },
     getSettings() {
       const rows = db.prepare("SELECT key, value FROM settings").all() as Array<{ key: string; value: string }>;

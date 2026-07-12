@@ -75,7 +75,7 @@ export const api = {
   user(id: number) {
     return request<{ user: PublicUser }>(`/api/admin/users/${id}`);
   },
-  updateUser(id: number, input: Partial<{ username: string; expiresAt: string; remark: string; status: "active" | "disabled" }>) {
+  updateUser(id: number, input: Partial<{ username: string; expiresAt: string; remark: string; status: "active" | "disabled"; upstreamId: number | null; customUpstreamUrl: string }>) {
     return request<{ user: PublicUser }>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(input) });
   },
   enableUser(id: number) {
@@ -95,6 +95,12 @@ export const api = {
   },
   upstreams() {
     return request<{ items: Upstream[] }>("/api/admin/upstreams");
+  },
+  createUpstream(input: { name: string; url: string; enabled: boolean }) {
+    return request<{ upstream: Upstream; message: string }>("/api/admin/upstreams", { method: "POST", body: JSON.stringify(input) });
+  },
+  deleteUpstream(id: number) {
+    return request<{ message: string }>(`/api/admin/upstreams/id/${id}`, { method: "DELETE" });
   },
   saveUpstream(client: string, input: { url: string; enabled: boolean }) {
     return request<{ upstream: Upstream; message: string }>(`/api/admin/upstreams/${client}`, { method: "PUT", body: JSON.stringify(input) });

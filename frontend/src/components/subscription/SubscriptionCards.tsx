@@ -78,6 +78,7 @@ export function SubscriptionCards({ data, onReset }: { data: SubscriptionData; o
           <CardTitle>订阅流量</CardTitle>
         </CardHeader>
         <CardContent>
+          {data.upstreamName && <div className="mb-3 text-sm text-muted-foreground">当前上游：{data.upstreamName}</div>}
           {data.usage ? (
             <div className="space-y-4">
               <div className="h-2 overflow-hidden rounded-full bg-muted">

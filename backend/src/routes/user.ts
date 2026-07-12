@@ -16,17 +16,17 @@ function baseUrl(req: AuthedRequest) {
 export function userRoutes(store: Store) {
   const router = Router();
 
-  router.get("/subscription", (req: AuthedRequest, res) => {
+  router.get("/subscription", async (req: AuthedRequest, res) => {
     const user = store.findUserById(req.user?.id ?? 0);
     if (!user) return res.status(401).json({ message: "请先登录" });
     const publicUser = store.publicUser(user);
     const origin = baseUrl(req);
     const upstreams = store.listUpstreams();
-    const usageUpstream = upstreams.find((row) => row.enabled && row.subscriptionUserinfo);
+    const assigned = user.custom_upstream_url ? undefined : (user.upstream_id ? store.findUpstreamById(user.upstream_id) : undefined);
+    const usageUpstream = assigned ?? upstreams.find((row) => row.enabled && row.url);
     const clientLinks = userVisibleClients.flatMap((item) => {
-      const upstream = upstreams.find((row) => row.client === item.client);
-      if (upstream && !upstream.enabled) return [];
-
+      const legacyClientConfig = upstreams.find((row) => row.client === item.client && !row.client.startsWith("source-"));
+      if (legacyClientConfig && !legacyClientConfig.enabled) return [];
       return [{
         client: item.client,
         name: clientName(item.client),
@@ -35,11 +35,20 @@ export function userRoutes(store: Store) {
       }];
     });
 
+    let customUsage = null;
+    if (user.custom_upstream_url) {
+      try {
+        const response = await fetch(user.custom_upstream_url, { headers: { "user-agent": store.getSettings().usageRefreshUserAgent || "clash-verge/v2.5.1" }, signal: AbortSignal.timeout(8000) });
+        customUsage = parseSubscriptionUserinfo(response.headers.get("subscription-userinfo") || undefined, new Date().toISOString());
+        await response.body?.cancel();
+      } catch { /* 专属上游不可用时仍允许用户查看订阅链接 */ }
+    }
     return res.json({
       user: publicUser,
       genericLink: `${origin}/sub/${user.token}`,
       clientLinks,
-      usage: parseSubscriptionUserinfo(usageUpstream?.subscriptionUserinfo, usageUpstream?.lastCheckedAt),
+      usage: customUsage ?? parseSubscriptionUserinfo(usageUpstream?.subscriptionUserinfo, usageUpstream?.lastCheckedAt),
+      upstreamName: user.custom_upstream_url ? "专属上游" : usageUpstream?.name || null,
       instructions: [
         "推荐优先使用通用订阅链接。",
         "如果客户端无法自动识别，请使用对应客户端专用链接。",

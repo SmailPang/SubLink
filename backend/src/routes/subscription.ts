@@ -44,7 +44,12 @@ function upstreamRequestHeaders(req: import("express").Request) {
   return headers;
 }
 
-function pickUpstream(store: Store, client: string) {
+function pickUpstream(store: Store, client: string, user?: ReturnType<Store["findUserByToken"]>) {
+  if (user?.custom_upstream_url) return { ...store.listUpstreams()[0], id: -user.id, client: `custom-${user.id}`, name: "专属上游", url: user.custom_upstream_url, enabled: true };
+  if (user?.upstream_id) {
+    const assigned = store.findUpstreamById(user.upstream_id);
+    if (assigned?.enabled && assigned.url) return assigned;
+  }
   const requested = store.findUpstream(client);
   if (requested?.enabled && requested.url) return requested;
 
@@ -53,6 +58,9 @@ function pickUpstream(store: Store, client: string) {
     const upstream = store.findUpstream(fallback);
     if (upstream?.enabled && upstream.url) return upstream;
   }
+
+  const source = store.listUpstreams().find((item) => item.client.startsWith("source-") && item.enabled && item.url);
+  if (source) return source;
 
   return requested;
 }
@@ -107,12 +115,13 @@ export function subscriptionRoutes(store: Store) {
       return res.status(403).type("text/plain").send("订阅链接已失效");
     }
 
-    const upstream = pickUpstream(store, client);
+    const upstream = pickUpstream(store, client, user);
     const settings = store.getSettings();
     const converterUrl = settings.converterUrl;
     const remoteConfig = settings.remoteConfig;
     const siteName = settings.siteName || "SubLink";
-    const useConverter = converterUrl && remoteConfig && remoteConfig !== "none";
+    const targetMap: Record<string, string> = { default: "clash", clash: "clash", mihomo: "clash", shadowrocket: "ss", singbox: "singbox", surge: "surge", loon: "loon", stash: "clash", quantumultx: "quanx", egern: "clash", v2ray: "v2ray" };
+    const useConverter = Boolean(converterUrl) && client !== "default";
 
     try {
       if (upstream?.enabled && upstream.url) {
@@ -125,9 +134,9 @@ export function subscriptionRoutes(store: Store) {
         // 如果配置了订阅转换服务和远程配置
         if (useConverter) {
           const convertUrl = new URL(converterUrl);
-          convertUrl.searchParams.set("target", "clash");
+          convertUrl.searchParams.set("target", targetMap[client] || "clash");
           convertUrl.searchParams.set("url", upstream.url);
-          convertUrl.searchParams.set("config", remoteConfig);
+          if (remoteConfig && remoteConfig !== "none") convertUrl.searchParams.set("config", remoteConfig);
 
           const remote = await fetch(convertUrl.toString(), {
             headers: upstreamRequestHeaders(req),
@@ -136,7 +145,7 @@ export function subscriptionRoutes(store: Store) {
 
           if (!remote.ok) throw new Error("converter failed");
           const text = await remote.text();
-          store.updateUpstreamHealth(upstream.client, {
+          if (upstream.id > 0) store.updateUpstreamHealth(upstream.client, {
             status: "healthy",
             latencyMs: Date.now() - started,
             subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? ""
@@ -153,7 +162,7 @@ export function subscriptionRoutes(store: Store) {
         });
         if (!remote.ok) throw new Error("bad upstream");
         const text = await remote.text();
-        store.updateUpstreamHealth(upstream.client, {
+        if (upstream.id > 0) store.updateUpstreamHealth(upstream.client, {
           status: "healthy",
           latencyMs: Date.now() - started,
           subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? ""
@@ -166,7 +175,7 @@ export function subscriptionRoutes(store: Store) {
       store.writeAccessLog({ user_id: user.id, username: user.username, client, ip, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
       return res.type("text/plain").send(sampleSubscription(user.username, client));
     } catch (error) {
-      if (upstream) {
+      if (upstream && upstream.id > 0) {
         store.updateUpstreamHealth(upstream.client, {
           status: "unhealthy",
           latencyMs: Date.now() - started,
