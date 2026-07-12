@@ -1,7 +1,6 @@
 export interface Upstream {
   id: number;
   client: string;
-  name: string;
   url: string;
   enabled: boolean;
   healthStatus: "unknown" | "healthy" | "unhealthy";

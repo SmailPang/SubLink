@@ -16,13 +16,6 @@ export function formatDateTime(value?: string | null) {
   }).format(new Date(value))
 }
 
-export function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
-  return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
-}
-
 export function formatExpiresAt(value: string, role?: string) {
   if (role === "admin") return "-"
   return formatDateTime(value)

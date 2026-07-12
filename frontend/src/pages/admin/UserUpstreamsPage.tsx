@@ -2,39 +2,119 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import { formatBytes, formatDateTime } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import type { Upstream } from "@/types/upstream";
 
-function usage(value: string) {
-  const fields = Object.fromEntries(value.split(";").map((part) => part.trim().split("=")).filter((item) => item.length === 2));
-  const used = Number(fields.upload || 0) + Number(fields.download || 0);
-  const total = Number(fields.total || 0);
-  return total ? `${formatBytes(used)} / ${formatBytes(total)}` : "暂无流量信息";
-}
+const names: Record<string, string> = { default: "默认", clash: "Clash", mihomo: "Mihomo", shadowrocket: "Shadowrocket", singbox: "SingBox", surge: "Surge", loon: "Loon", stash: "Stash", quantumultx: "Quantumult X", egern: "Egern", v2ray: "V2Ray" };
 
 export function UserUpstreamsPage() {
   const [items, setItems] = useState<Upstream[]>([]);
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const load = async () => setItems((await api.upstreams()).items);
-  useEffect(() => { void load().catch((e) => toast.error(e.message)); }, []);
+  const [savedItems, setSavedItems] = useState<Upstream[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState(false);
 
-  async function add() {
-    setBusy(true);
-    try { await api.createUpstream({ name, url, enabled: true }); setName(""); setUrl(""); await load(); toast.success("上游已添加，系统会自动识别订阅内容"); }
-    catch (e) { toast.error(e instanceof Error ? e.message : "添加失败"); } finally { setBusy(false); }
+  async function load() {
+    setLoading(true);
+    try {
+      const result = await api.upstreams();
+      setItems(result.items);
+      setSavedItems(result.items);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载失败");
+    } finally {
+      setLoading(false);
+    }
   }
-  async function test(item: Upstream) { try { await api.testUpstream(item.client); await load(); toast.success("检测成功，流量信息已更新"); } catch (e) { toast.error(e instanceof Error ? e.message : "检测失败"); } }
-  async function remove(item: Upstream) { if (!confirm(`确定删除“${item.name}”吗？已分配用户将改用默认上游。`)) return; await api.deleteUpstream(item.id); await load(); }
 
-  return <div className="space-y-6">
-    <Card><CardHeader><CardTitle>添加上游订阅源</CardTitle></CardHeader><CardContent className="grid gap-4 md:grid-cols-[220px_1fr_auto] md:items-end"><div className="space-y-2"><Label>上游名称</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：机场 A" /></div><div className="space-y-2"><Label>Clash 或其他订阅链接</Label><Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." /></div><Button disabled={busy || !name || !url} onClick={add}>添加上游</Button><p className="text-sm text-muted-foreground md:col-span-3">每个上游只需添加一次。用户访问 Clash、SingBox、Surge 等专用链接时，系统会按客户端自动转换。</p></CardContent></Card>
-    <Card><CardHeader><CardTitle>上游与流量使用情况</CardTitle></CardHeader><CardContent><Table><TableHeader><TableRow><TableHead>名称</TableHead><TableHead>健康状态</TableHead><TableHead>流量</TableHead><TableHead>延迟</TableHead><TableHead>最后刷新</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>{items.map((item) => <TableRow key={item.id}><TableCell><div className="font-medium">{item.name}</div><div className="max-w-md truncate text-xs text-muted-foreground" title={item.url}>{item.url}</div></TableCell><TableCell><Badge variant={item.healthStatus === "healthy" ? "secondary" : item.healthStatus === "unhealthy" ? "destructive" : "outline"}>{item.healthStatus === "healthy" ? "正常" : item.healthStatus === "unhealthy" ? "异常" : "未检测"}</Badge></TableCell><TableCell>{usage(item.subscriptionUserinfo)}</TableCell><TableCell>{item.lastLatencyMs == null ? "—" : `${item.lastLatencyMs} ms`}</TableCell><TableCell>{formatDateTime(item.lastCheckedAt)}</TableCell><TableCell className="space-x-2"><Button size="sm" variant="outline" onClick={() => test(item)}>检测并刷新</Button><Button size="sm" variant="destructive" onClick={() => remove(item)}>删除</Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
-  </div>;
+  useEffect(() => { void load(); }, []);
+
+  const changed = JSON.stringify(items.map(({ client, url, enabled }) => ({ client, url, enabled }))) !== JSON.stringify(savedItems.map(({ client, url, enabled }) => ({ client, url, enabled })));
+
+  async function saveAll() {
+    setSaving(true);
+    try {
+      const result = await api.saveUpstreams(items.map((item) => ({ client: item.client, url: item.url, enabled: item.enabled })));
+      setItems(result.items);
+      setSavedItems(result.items);
+      toast.success("保存成功");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function test(item: Upstream) {
+    try {
+      const result = await api.testUpstream(item.client);
+      setItems((old) => old.map((row) => row.client === item.client ? result.upstream : row));
+      setSavedItems((old) => old.map((row) => row.client === item.client ? result.upstream : row));
+      toast.success("测试成功");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "上游链接不可用");
+    }
+  }
+
+  async function checkAll() {
+    setChecking(true);
+    try {
+      const result = await api.checkAllUpstreams();
+      const checked = new Map(result.items.map((item) => [item.client, item]));
+      setItems((old) => old.map((item) => checked.get(item.client) ?? item));
+      setSavedItems((old) => old.map((item) => checked.get(item.client) ?? item));
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "检测失败");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function refreshUsage() {
+    try {
+      const result = await api.refreshUsage();
+      await load();
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "刷新流量失败");
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>全局上游配置</CardTitle>
+        <CardAction>
+          <div className="flex gap-2"><Button variant="outline" onClick={checkAll} disabled={loading || checking}>{checking ? "检测中" : "检测全部"}</Button><Button variant="outline" onClick={refreshUsage} disabled={loading}>立即刷新流量</Button><Button onClick={saveAll} disabled={loading || saving || !changed}>{saving ? "保存中" : changed ? "保存配置" : "已保存"}</Button></div>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {loading ? <Skeleton className="h-80" /> : items.length === 0 ? <div className="p-8 text-center text-muted-foreground">暂无上游配置</div> : (
+          <Table>
+            <TableHeader><TableRow><TableHead>客户端</TableHead><TableHead>上游订阅链接</TableHead><TableHead>启用状态</TableHead><TableHead>健康状态</TableHead><TableHead>延迟</TableHead><TableHead>最后检测</TableHead><TableHead>操作</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.client}>
+                  <TableCell>{names[item.client] || item.client}</TableCell>
+                  <TableCell><Input value={item.url} onChange={(event) => setItems((old) => old.map((row) => row.client === item.client ? { ...row, url: event.target.value } : row))} placeholder="请输入上游订阅链接" /></TableCell>
+                  <TableCell><Switch checked={item.enabled} onCheckedChange={(checked) => setItems((old) => old.map((row) => row.client === item.client ? { ...row, enabled: checked } : row))} /></TableCell>
+                  <TableCell><Badge variant={item.healthStatus === "healthy" ? "secondary" : item.healthStatus === "unhealthy" ? "destructive" : "outline"} title={item.lastError}>{item.healthStatus === "healthy" ? "正常" : item.healthStatus === "unhealthy" ? "异常" : "未检测"}</Badge></TableCell>
+                  <TableCell>{item.lastLatencyMs == null ? "—" : `${item.lastLatencyMs} ms`}</TableCell>
+                  <TableCell>{formatDateTime(item.lastCheckedAt)}</TableCell>
+                  <TableCell><Button size="sm" variant="outline" onClick={() => test(item)}>测试上游</Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
 }

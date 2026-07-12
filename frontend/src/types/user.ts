@@ -12,9 +12,6 @@ export interface PublicUser {
   lastClient: string | null;
   lastAccessAt: string | null;
   mustChangePassword: boolean;
-  upstreamId: number | null;
-  customUpstreamUrl: string;
-  upstreamName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,7 +28,6 @@ export interface SubscriptionData {
   genericLink: string;
   clientLinks: ClientLink[];
   usage: SubscriptionUsage | null;
-  upstreamName?: string | null;
   instructions: string[];
 }
 

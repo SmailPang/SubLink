@@ -34,8 +34,6 @@ type UserRecord = {
   last_client: string | null;
   last_access_at: string | null;
   must_change_password: 0 | 1;
-  upstream_id: number | null;
-  custom_upstream_url: string;
   created_at: string;
   updated_at: string;
 };
@@ -43,7 +41,6 @@ type UserRecord = {
 type UpstreamRecord = {
   id: number;
   client: string;
-  name: string;
   url: string;
   enabled: 0 | 1;
   health_status: "unknown" | "healthy" | "unhealthy";
@@ -220,8 +217,6 @@ function publicUser(user: UserRecord) {
     lastClient: user.last_client,
     lastAccessAt: user.last_access_at,
     mustChangePassword: Boolean(user.must_change_password),
-    upstreamId: user.upstream_id,
-    customUpstreamUrl: user.custom_upstream_url || "",
     createdAt: user.created_at,
     updatedAt: user.updated_at
   };
@@ -367,7 +362,6 @@ function upstreamRow(row: UpstreamRecord) {
   return {
     id: row.id,
     client: row.client,
-    name: row.name || row.client,
     url: row.url,
     enabled: Boolean(row.enabled),
     healthStatus: row.health_status,
@@ -457,12 +451,7 @@ function subOrigin(request: Request, settings: Record<string, string>) {
   return (settings.publicBaseUrl || new URL(request.url).origin).replace(/\/+$/, "");
 }
 
-async function pickUpstream(env: Env, client: string, user?: UserRecord) {
-  if (user?.custom_upstream_url) return { id: -user.id, client: `custom-${user.id}`, name: "专属上游", url: user.custom_upstream_url, enabled: 1, health_status: "unknown", last_checked_at: null, last_latency_ms: null, last_error: "", subscription_userinfo: "", created_at: now(), updated_at: now() } as UpstreamRecord;
-  if (user?.upstream_id) {
-    const assigned = await env.DB.prepare("SELECT * FROM upstreams WHERE id = ? AND enabled = 1").bind(user.upstream_id).first<UpstreamRecord>();
-    if (assigned?.url) return assigned;
-  }
+async function pickUpstream(env: Env, client: string) {
   const requested = await env.DB.prepare("SELECT * FROM upstreams WHERE client = ?").bind(client).first<UpstreamRecord>();
   if (requested?.enabled && requested.url) return requested;
   const fallbackOrder = client === "default" ? ["clash", "mihomo", "default"] : ["default", "clash", "mihomo"];
@@ -470,8 +459,6 @@ async function pickUpstream(env: Env, client: string, user?: UserRecord) {
     const upstream = await env.DB.prepare("SELECT * FROM upstreams WHERE client = ?").bind(fallback).first<UpstreamRecord>();
     if (upstream?.enabled && upstream.url) return upstream;
   }
-  const source = await env.DB.prepare("SELECT * FROM upstreams WHERE client LIKE 'source-%' AND enabled = 1 AND url != '' ORDER BY id LIMIT 1").first<UpstreamRecord>();
-  if (source) return source;
   return requested;
 }
 
@@ -531,21 +518,14 @@ async function handleApi(request: Request, env: Env, path: string) {
       const origin = subOrigin(request, settings);
       const upstreamRows = await env.DB.prepare("SELECT * FROM upstreams ORDER BY id").all<UpstreamRecord>();
       const upstreams = upstreamRows.results ?? [];
-      const usageUpstream = user.upstream_id ? upstreams.find((row) => row.id === user.upstream_id) : upstreams.find((row) => row.enabled && row.url);
-      let customUsage = null;
-      if (user.custom_upstream_url) {
-        try {
-          const response = await fetch(user.custom_upstream_url, { headers: { "user-agent": usageRefreshUserAgent(settings) }, signal: AbortSignal.timeout(8000) });
-          customUsage = parseSubscriptionUserinfo(response.headers.get("subscription-userinfo") || undefined, now());
-          await response.body?.cancel();
-        } catch { /* 专属上游不可用时仍返回订阅链接 */ }
-      }
+      const usageUpstream = upstreams.find((row) => row.enabled && row.subscription_userinfo);
       return json({
         user: publicUser(user),
         genericLink: `${origin}/sub/${user.token}`,
         clientLinks: userVisibleClients.flatMap((item) => {
-          const legacyClientConfig = upstreams.find((row) => row.client === item.client && !row.client.startsWith("source-"));
-          if (legacyClientConfig && !legacyClientConfig.enabled) return [];
+          const upstream = upstreams.find((row) => row.client === item.client);
+          if (upstream && !upstream.enabled) return [];
+
           return [{
             client: item.client,
             name: item.name,
@@ -553,8 +533,7 @@ async function handleApi(request: Request, env: Env, path: string) {
             enabled: true
           }];
         }),
-        usage: customUsage ?? parseSubscriptionUserinfo(usageUpstream?.subscription_userinfo, usageUpstream?.last_checked_at),
-        upstreamName: user.custom_upstream_url ? "专属上游" : usageUpstream?.name || null,
+        usage: parseSubscriptionUserinfo(usageUpstream?.subscription_userinfo, usageUpstream?.last_checked_at),
         instructions: [
           "推荐优先使用通用订阅链接。",
           "如果客户端无法自动识别，请使用对应客户端专用链接。",
@@ -646,8 +625,7 @@ async function handleApi(request: Request, env: Env, path: string) {
       `).bind(`${today}%`).first<{ requests: number; success: number; average_response_ms: number; active_users: number }>();
       const expiringSoon = await env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'user' AND status = 'active' AND expires_at BETWEEN ? AND ?")
         .bind(now(), new Date(Date.now() + 7 * 86400000).toISOString()).first<{ count: number }>();
-      const upstreamSummary = await env.DB.prepare("SELECT health_status AS status, COUNT(*) AS count FROM upstreams WHERE enabled = 1 AND url != '' GROUP BY health_status").all<{ status: string; count: number }>();
-      const upstreams = await env.DB.prepare("SELECT * FROM upstreams WHERE url != '' ORDER BY id").all<UpstreamRecord>();
+      const upstreamSummary = await env.DB.prepare("SELECT health_status AS status, COUNT(*) AS count FROM upstreams WHERE enabled = 1 GROUP BY health_status").all<{ status: string; count: number }>();
       const dailyTrend = await env.DB.prepare(`
         SELECT substr(accessed_at, 1, 10) AS date, COUNT(*) AS requests,
           SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success
@@ -674,7 +652,6 @@ async function handleApi(request: Request, env: Env, path: string) {
         activeToday: todayMetrics?.active_users ?? 0,
         expiringSoon: expiringSoon?.count ?? 0,
         upstreamSummary: upstreamSummary.results ?? [],
-        upstreams: (upstreams.results ?? []).map(upstreamRow),
         dailyTrend: dailyTrend.results ?? [],
         clientStats: clientStats.results ?? [],
         recentLogs: (recentLogs.results ?? []).map(logRow)
@@ -759,11 +736,11 @@ async function handleApi(request: Request, env: Env, path: string) {
         return user ? json({ user: publicUser(user) }) : json({ message: "用户不存在" }, 404);
       }
       if (!action && method === "PATCH") {
-        const input = await bodyJson<{ username?: string; expiresAt?: string; remark?: string; status?: "active" | "disabled"; upstreamId?: number | null; customUpstreamUrl?: string }>(request);
+        const input = await bodyJson<{ username?: string; expiresAt?: string; remark?: string; status?: "active" | "disabled" }>(request);
         const old = await getUserById(env, id);
         if (!old) return json({ message: "用户不存在" }, 404);
-        await env.DB.prepare("UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, upstream_id = ?, custom_upstream_url = ?, updated_at = ? WHERE id = ?")
-          .bind(input.username ?? old.username, input.expiresAt ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, input.upstreamId === undefined ? old.upstream_id : input.upstreamId, input.customUpstreamUrl ?? old.custom_upstream_url, now(), id).run();
+        await env.DB.prepare("UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, updated_at = ? WHERE id = ?")
+          .bind(input.username ?? old.username, input.expiresAt ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, now(), id).run();
         const user = await getUserById(env, id);
         await writeAdminAudit(env, request, auth.user, "user.update", "user", String(id), input);
         return json({ user: publicUser(user!) });
@@ -800,16 +777,6 @@ async function handleApi(request: Request, env: Env, path: string) {
     }
 
     if (path === "/api/admin/upstreams") {
-      if (method === "POST") {
-        const input = await bodyJson<{ name?: string; url?: string; enabled?: boolean }>(request);
-        if (!input.name?.trim() || !input.url || !/^https?:\/\//i.test(input.url)) return json({ message: "请输入名称和有效的订阅链接" }, 400);
-        const key = `source-${token().slice(0, 10)}`;
-        const time = now();
-        await env.DB.prepare("INSERT INTO upstreams (client, name, url, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(key, input.name.trim(), input.url, input.enabled === false ? 0 : 1, time, time).run();
-        const upstream = await env.DB.prepare("SELECT * FROM upstreams WHERE client = ?").bind(key).first<UpstreamRecord>();
-        await writeAdminAudit(env, request, auth.user, "upstream.create", "upstream", String(upstream?.id || ""), { name: input.name });
-        return json({ upstream: upstreamRow(upstream!), message: "添加成功" }, 201);
-      }
       if (method === "PUT") {
         const input = await bodyJson<{ items?: Array<{ client?: string; url?: string; enabled?: boolean }> }>(request);
         if (!Array.isArray(input.items) || input.items.length === 0 || input.items.some((item) => !item.client)) return json({ message: "表单内容不完整" }, 400);
@@ -827,18 +794,13 @@ async function handleApi(request: Request, env: Env, path: string) {
         await writeAdminAudit(env, request, auth.user, "upstream.save_all", "upstream", "", { count: input.items.length });
       }
 
-      const rows = await env.DB.prepare("SELECT * FROM upstreams WHERE url != '' OR client LIKE 'source-%' ORDER BY id").all<UpstreamRecord>();
-      const items = (rows.results ?? []).map(upstreamRow);
+      const rows = await env.DB.prepare("SELECT * FROM upstreams ORDER BY id").all<UpstreamRecord>();
+      const upstreams = rows.results ?? [];
+      const items = clients.map((item) => {
+        const row = upstreams.find((value) => value.client === item.client);
+        return row ? upstreamRow(row) : { id: 0, client: item.client, url: "", enabled: true, healthStatus: "unknown", lastCheckedAt: null, lastLatencyMs: null, lastError: "", subscriptionUserinfo: "", created_at: now(), updated_at: now() };
+      });
       return json(method === "PUT" ? { items, message: "保存成功" } : { items });
-    }
-
-    const upstreamDelete = /^\/api\/admin\/upstreams\/id\/(\d+)$/.exec(path);
-    if (upstreamDelete && method === "DELETE") {
-      const id = Number(upstreamDelete[1]);
-      await env.DB.prepare("UPDATE users SET upstream_id = NULL WHERE upstream_id = ?").bind(id).run();
-      await env.DB.prepare("DELETE FROM upstreams WHERE id = ?").bind(id).run();
-      await writeAdminAudit(env, request, auth.user, "upstream.delete", "upstream", String(id));
-      return json({ message: "删除成功" });
     }
 
     if (path === "/api/admin/upstreams/health-check" && method === "POST") {
@@ -930,13 +892,12 @@ async function handleSubscription(request: Request, env: Env, path: string) {
     return text("订阅链接已失效", 403);
   }
 
-  const upstream = await pickUpstream(env, client, user);
+  const upstream = await pickUpstream(env, client);
   const settings = await getSettings(env);
   const converterUrl = settings.converterUrl;
   const remoteConfig = settings.remoteConfig;
   const siteName = settings.siteName || "SubLink";
-  const targetMap: Record<string, string> = { default: "clash", clash: "clash", mihomo: "clash", shadowrocket: "ss", singbox: "singbox", surge: "surge", loon: "loon", stash: "clash", quantumultx: "quanx", egern: "clash", v2ray: "v2ray" };
-  const useConverter = Boolean(converterUrl) && client !== "default";
+  const useConverter = converterUrl && remoteConfig && remoteConfig !== "none";
 
   try {
     if (upstream?.enabled && upstream.url) {
@@ -949,9 +910,9 @@ async function handleSubscription(request: Request, env: Env, path: string) {
       // 如果配置了订阅转换服务和远程配置
       if (useConverter) {
         const convertUrl = new URL(converterUrl);
-        convertUrl.searchParams.set("target", targetMap[client] || "clash");
+        convertUrl.searchParams.set("target", "clash");
         convertUrl.searchParams.set("url", upstream.url);
-        if (remoteConfig && remoteConfig !== "none") convertUrl.searchParams.set("config", remoteConfig);
+        convertUrl.searchParams.set("config", remoteConfig);
 
         const headers = new Headers();
         if (ua) headers.set("user-agent", ua);
@@ -976,7 +937,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
         responseHeaders.set("profile-title", siteName);
         responseHeaders.set("content-disposition", `attachment; filename=${siteName}`);
 
-        if (upstream.id > 0) await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? "" });
+        await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? "" });
         await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
         return new Response(remote.body, { headers: responseHeaders });
       }
@@ -1004,7 +965,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
       responseHeaders.set("profile-title", siteName);
       responseHeaders.set("content-disposition", `attachment; filename=${siteName}`);
 
-      if (upstream.id > 0) await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? "" });
+      await updateUpstreamHealth(env, upstream.client, { status: "healthy", latencyMs: Date.now() - started, subscriptionUserinfo: remote.headers.get("subscription-userinfo") ?? "" });
       await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
       return new Response(remote.body, { headers: responseHeaders });
     }
@@ -1012,7 +973,7 @@ async function handleSubscription(request: Request, env: Env, path: string) {
     await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "success", response_time_ms: Date.now() - started });
     return text(sampleSubscription(user.username, client));
   } catch (error) {
-    if (upstream && upstream.id > 0) await updateUpstreamHealth(env, upstream.client, { status: "unhealthy", latencyMs: Date.now() - started, error: error instanceof Error ? error.message : "上游请求失败" });
+    if (upstream) await updateUpstreamHealth(env, upstream.client, { status: "unhealthy", latencyMs: Date.now() - started, error: error instanceof Error ? error.message : "上游请求失败" });
     await writeAccessLog(env, { user_id: user.id, username: user.username, client, ip, ip_location, user_agent: ua, status: "failed", response_time_ms: Date.now() - started });
     return text("上游链接不可用", 502);
   }

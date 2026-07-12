@@ -17,8 +17,6 @@ export interface UserRecord {
   last_client: string | null;
   last_access_at: string | null;
   must_change_password: 0 | 1;
-  upstream_id: number | null;
-  custom_upstream_url: string;
   created_at: string;
   updated_at: string;
 }
@@ -34,9 +32,6 @@ export interface PublicUser {
   lastClient: string | null;
   lastAccessAt: string | null;
   mustChangePassword: boolean;
-  upstreamId: number | null;
-  customUpstreamUrl: string;
-  upstreamName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -44,7 +39,6 @@ export interface PublicUser {
 export interface UpstreamRecord {
   id: number;
   client: string;
-  name: string;
   url: string;
   enabled: 0 | 1;
   health_status: UpstreamHealthStatus;
@@ -59,7 +53,6 @@ export interface UpstreamRecord {
 export interface Upstream {
   id: number;
   client: string;
-  name: string;
   url: string;
   enabled: boolean;
   healthStatus: UpstreamHealthStatus;

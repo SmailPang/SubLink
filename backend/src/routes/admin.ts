@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { clients } from "../clients.js";
 import type { Store } from "../db.js";
 import { withIpLocation } from "../ipGeo.js";
 import { accessLogQuery } from "../logQuery.js";
@@ -105,8 +106,6 @@ export function adminRoutes(store: Store) {
       expiresAt: z.string().optional(),
       remark: z.string().optional(),
       status: z.enum(["active", "disabled"]).optional()
-      ,upstreamId: z.number().int().positive().nullable().optional()
-      ,customUpstreamUrl: z.string().url().or(z.literal("")).optional()
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: "表单内容不完整" });
     const user = store.updateUser(Number(req.params.id), {
@@ -114,8 +113,6 @@ export function adminRoutes(store: Store) {
         expires_at: parsed.data.expiresAt,
         remark: parsed.data.remark,
         status: parsed.data.status
-        ,upstream_id: parsed.data.upstreamId
-        ,custom_upstream_url: parsed.data.customUpstreamUrl
       });
     audit(req as AuthedRequest, "user.update", "user", req.params.id, parsed.data);
     return res.json({ user });
@@ -142,21 +139,10 @@ export function adminRoutes(store: Store) {
   });
 
   router.get("/upstreams", (_req, res) => {
-    return res.json({ items: store.listUpstreams().filter((row) => row.url || row.client.startsWith("source-")) });
-  });
-
-  router.post("/upstreams", (req, res) => {
-    const parsed = z.object({ name: z.string().min(1).max(80), url: z.string().url(), enabled: z.boolean().optional().default(true) }).safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ message: "请输入名称和有效的订阅链接" });
-    const upstream = store.createUpstream(parsed.data);
-    audit(req as AuthedRequest, "upstream.create", "upstream", String(upstream.id), { name: upstream.name });
-    return res.status(201).json({ upstream, message: "添加成功" });
-  });
-
-  router.delete("/upstreams/id/:id", (req, res) => {
-    store.deleteUpstream(Number(req.params.id));
-    audit(req as AuthedRequest, "upstream.delete", "upstream", req.params.id);
-    return res.json({ message: "删除成功" });
+    const rows = store.listUpstreams();
+    return res.json({
+      items: clients.map((item) => rows.find((row) => row.client === item.client) ?? store.saveUpstream(item.client, "", true))
+    });
   });
 
   router.post("/upstreams/health-check", async (req, res) => {
