@@ -1,6 +1,5 @@
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
-import { getToken } from "@/lib/api";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/pages/login/LoginPage";
 import { SubscriptionPage } from "@/pages/user/SubscriptionPage";
@@ -17,7 +16,6 @@ import { AnnouncementsManagePage } from "@/pages/admin/AnnouncementsManagePage";
 import { AuditLogsPage } from "@/pages/admin/AuditLogsPage";
 
 function ProtectedLayout() {
-  if (!getToken()) return <Navigate to="/login" replace />;
   return (
     <AppShell>
       <Outlet />

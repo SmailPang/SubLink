@@ -4,27 +4,12 @@ import type { SubscriptionData, PublicUser } from "@/types/user";
 import type { Upstream } from "@/types/upstream";
 import type { DashboardData } from "@/types/dashboard";
 
-const TOKEN_KEY = "sublink_token";
-
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
+if (typeof window !== "undefined") window.localStorage.removeItem("sublink_token");
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, headers, credentials: "same-origin" });
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
@@ -47,6 +32,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password, turnstileToken })
     });
+  },
+  logout() {
+    return request<{ message: string }>("/api/auth/logout", { method: "POST" });
   },
   me() {
     return request<{ user: PublicUser }>("/api/auth/me");
@@ -133,10 +121,10 @@ export const api = {
     return request<{ user: PublicUser; message: string }>("/api/user/profile", { method: "PATCH", body: JSON.stringify(input) });
   },
   changeOwnPassword(input: { currentPassword: string; newPassword: string }) {
-    return request<{ message: string }>("/api/user/password", { method: "POST", body: JSON.stringify(input) });
+    return request<{ token: string; message: string }>("/api/user/password", { method: "POST", body: JSON.stringify(input) });
   },
   forceChangePassword(input: { newPassword: string }) {
-    return request<{ message: string }>("/api/user/force-password", { method: "POST", body: JSON.stringify(input) });
+    return request<{ token: string; message: string }>("/api/user/force-password", { method: "POST", body: JSON.stringify(input) });
   },
   settings() {
     return request<{ settings: Record<string, string> }>("/api/admin/settings");

@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 async function login(username: string, password: string) {
-  const app = await createApp({ dbPath, jwtSecret: "test-secret" });
+  const app = await createApp({ dbPath, jwtSecret: "test-secret", turnstileVerifier: async () => true });
   apps.push(app);
   const response = await request(app)
     .post("/api/auth/login")
@@ -85,6 +85,51 @@ describe("SubLink backend API", () => {
       role: "admin",
       status: "active"
     });
+  });
+
+  it("登录会话使用 HttpOnly 严格 Cookie", async () => {
+    const { response } = await login("admin", "admin123");
+    const cookies = response.headers["set-cookie"] as unknown as string[] | undefined;
+    const cookie = cookies?.[0] ?? "";
+
+    expect(cookie).toContain("sublink_session=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
+  });
+
+  it("Turnstile 未配置时登录失败关闭", async () => {
+    const app = await createApp({ dbPath, jwtSecret: "test-secret" });
+    apps.push(app);
+    const response = await request(app).post("/api/auth/login").send({ username: "admin", password: "admin123" });
+
+    expect(response.status).toBe(503);
+    expect(response.body.message).toContain("安全配置不完整");
+  });
+
+  it("连续登录失败会触发限流", async () => {
+    const app = await createApp({ dbPath, jwtSecret: "test-secret", turnstileVerifier: async () => true });
+    apps.push(app);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const response = await request(app).post("/api/auth/login").send({ username: "admin", password: `wrong-${attempt}` });
+      expect(response.status).toBe(401);
+    }
+    const blocked = await request(app).post("/api/auth/login").send({ username: "admin", password: "wrong-blocked" });
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers["retry-after"]).toBeTruthy();
+  });
+
+  it("Cookie 会话拒绝跨站写请求", async () => {
+    const { app, response } = await login("user", "user123");
+    const cookies = response.headers["set-cookie"] as unknown as string[] | undefined;
+    const cookie = (cookies?.[0] ?? "").split(";")[0];
+    const result = await request(app)
+      .post("/api/user/reset-token")
+      .set("Cookie", cookie)
+      .set("Origin", "https://attacker.example");
+
+    expect(result.status).toBe(403);
+    expect(result.body.message).toBe("请求来源校验失败");
   });
 
   it("使用错误密码登录时返回中文错误", async () => {
@@ -434,6 +479,17 @@ describe("SubLink backend API", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ currentPassword: "user123", newPassword: "newpass123" });
     expect(password.status).toBe(200);
+    expect(password.body.token).toEqual(expect.any(String));
+
+    const oldSession = await request(app)
+      .get("/api/auth/me")
+      .set("Authorization", `Bearer ${token}`);
+    expect(oldSession.status).toBe(401);
+
+    const refreshedSession = await request(app)
+      .get("/api/auth/me")
+      .set("Authorization", `Bearer ${password.body.token}`);
+    expect(refreshedSession.status).toBe(200);
 
     const oldLogin = await request(app)
       .post("/api/auth/login")
@@ -444,6 +500,17 @@ describe("SubLink backend API", () => {
       .post("/api/auth/login")
       .send({ username: "newuser", password: "newpass123" });
     expect(newLogin.status).toBe(200);
+  });
+
+  it("非首次登录账号不能调用强制改密接口", async () => {
+    const { app, token } = await login("user", "user123");
+    const response = await request(app)
+      .post("/api/user/force-password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "unauthorized-change" });
+
+    expect(response.status).toBe(403);
+    expect(response.body.message).toContain("不需要强制修改密码");
   });
 
   it("管理员访问日志会根据用户 ID 显示最新用户名", async () => {

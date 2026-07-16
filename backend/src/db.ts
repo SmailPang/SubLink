@@ -104,6 +104,7 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       last_client TEXT,
       last_access_at TEXT,
       must_change_password INTEGER NOT NULL DEFAULT 0,
+      auth_version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -169,16 +170,28 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS login_rate_limits (
+      rate_key TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      window_started_at TEXT NOT NULL,
+      blocked_until TEXT,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id);
     CREATE INDEX IF NOT EXISTS idx_access_logs_accessed_at ON access_logs(accessed_at);
     CREATE INDEX IF NOT EXISTS idx_access_logs_status ON access_logs(status);
     CREATE INDEX IF NOT EXISTS idx_access_logs_client ON access_logs(client);
     CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created_at ON admin_audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_login_rate_limits_updated_at ON login_rate_limits(updated_at);
   `);
 
   const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
   if (!userColumns.some((column) => column.name === "must_change_password")) {
     db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!userColumns.some((column) => column.name === "auth_version")) {
+    db.exec("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1");
   }
 
   const upstreamColumns = db.prepare("PRAGMA table_info(upstreams)").all() as Array<{ name: string }>;
@@ -195,8 +208,8 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
   const userCount = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
   if (userCount.count === 0) {
     const seedUser = db.prepare(`
-      INSERT INTO users (username, password_hash, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
-      VALUES (@username, @password_hash, @role, 'active', @expires_at, @remark, @token, 0, @created_at, @updated_at)
+      INSERT INTO users (username, password_hash, role, status, expires_at, remark, token, must_change_password, auth_version, created_at, updated_at)
+      VALUES (@username, @password_hash, @role, 'active', @expires_at, @remark, @token, 0, 1, @created_at, @updated_at)
     `);
     seedUser.run({
       username: "admin",
@@ -300,7 +313,8 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       return (db.prepare("SELECT * FROM users ORDER BY id DESC").all() as UserRecord[]).map(publicUser);
     },
     updateUserStatus(id, status) {
-      db.prepare("UPDATE users SET status = ?, updated_at = ? WHERE id = ?").run(status, now(), id);
+      db.prepare("UPDATE users SET status = ?, auth_version = auth_version + CASE WHEN ? = 'disabled' THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?")
+        .run(status, status, now(), id);
       const user = getUser.get(id) as UserRecord | undefined;
       if (!user) throw new Error("用户不存在");
       return publicUser(user);
@@ -309,9 +323,11 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       const old = getUser.get(id) as UserRecord | undefined;
       if (!old) throw new Error("用户不存在");
       db.prepare(`
-        UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, updated_at = ?
+        UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?,
+          auth_version = auth_version + CASE WHEN ? = 'disabled' AND status != 'disabled' THEN 1 ELSE 0 END,
+          updated_at = ?
         WHERE id = ?
-      `).run(input.username ?? old.username, input.expires_at ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, now(), id);
+      `).run(input.username ?? old.username, input.expires_at ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, input.status ?? old.status, now(), id);
       return publicUser(getUser.get(id) as UserRecord);
     },
     updateOwnProfile(id, input) {
@@ -325,26 +341,27 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
       const user = getUser.get(id) as UserRecord | undefined;
       if (!user) throw new Error("用户不存在");
       if (!bcrypt.compareSync(currentPassword, user.password_hash)) throw new Error("当前密码错误");
-      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?")
+      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, auth_version = auth_version + 1, updated_at = ? WHERE id = ?")
         .run(bcrypt.hashSync(nextPassword, 10), now(), id);
     },
     forceChangePassword(id, nextPassword) {
       const user = getUser.get(id) as UserRecord | undefined;
       if (!user) throw new Error("用户不存在");
-      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?")
+      if (!user.must_change_password) throw new Error("当前账号不需要强制修改密码");
+      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, auth_version = auth_version + 1, updated_at = ? WHERE id = ?")
         .run(bcrypt.hashSync(nextPassword, 10), now(), id);
     },
     setUserPassword(id, nextPassword) {
       const user = getUser.get(id) as UserRecord | undefined;
       if (!user) throw new Error("用户不存在");
-      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?")
+      db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, auth_version = auth_version + 1, updated_at = ? WHERE id = ?")
         .run(bcrypt.hashSync(nextPassword, 10), now(), id);
     },
     createUser(input) {
       const time = now();
       const result = db.prepare(`
-        INSERT INTO users (username, password_hash, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
-        VALUES (?, ?, ?, 'active', ?, ?, ?, 1, ?, ?)
+        INSERT INTO users (username, password_hash, role, status, expires_at, remark, token, must_change_password, auth_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'active', ?, ?, ?, 1, 1, ?, ?)
       `).run(input.username, bcrypt.hashSync(input.password, 10), input.role ?? "user", input.expiresAt ?? futureDate(), input.remark ?? "", token(), time, time);
       const user = getUser.get(Number(result.lastInsertRowid)) as UserRecord;
       return publicUser(user);
@@ -369,8 +386,8 @@ export function createStore(dbPath = path.join(process.cwd(), "data", "sublink.d
             .run(`+${Math.max(1, days)} days`, time, ...uniqueIds).changes;
         }
         const status = action === "enable" ? "active" : "disabled";
-        return db.prepare(`UPDATE users SET status = ?, updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`)
-          .run(status, time, ...uniqueIds).changes;
+        return db.prepare(`UPDATE users SET status = ?, auth_version = auth_version + CASE WHEN ? = 'disabled' THEN 1 ELSE 0 END, updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`)
+          .run(status, status, time, ...uniqueIds).changes;
       });
       return Number(run());
     },

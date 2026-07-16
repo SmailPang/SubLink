@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { clientName, userVisibleClients } from "../clients.js";
 import type { Store } from "../db.js";
+import { setSessionCookie, signToken } from "../auth.js";
 import { withIpLocation } from "../ipGeo.js";
 import { accessLogQuery } from "../logQuery.js";
 import { parseSubscriptionUserinfo } from "../subscriptionInfo.js";
@@ -13,7 +14,7 @@ function baseUrl(req: AuthedRequest) {
   return (configured || fallback).replace(/\/+$/, "");
 }
 
-export function userRoutes(store: Store) {
+export function userRoutes(store: Store, jwtSecret: string) {
   const router = Router();
 
   router.get("/subscription", (req: AuthedRequest, res) => {
@@ -94,7 +95,10 @@ export function userRoutes(store: Store) {
 
     try {
       store.changePassword(req.user?.id ?? 0, parsed.data.currentPassword, parsed.data.newPassword);
-      return res.json({ message: "保存成功" });
+      const user = store.findUserById(req.user?.id ?? 0)!;
+      const token = signToken(user, jwtSecret);
+      setSessionCookie(req, res, token);
+      return res.json({ token, message: "保存成功" });
     } catch (error) {
       return res.status(400).json({ message: error instanceof Error ? error.message : "保存失败" });
     }
@@ -105,10 +109,15 @@ export function userRoutes(store: Store) {
       newPassword: z.string().min(6)
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: "密码不能少于 6 位" });
+    const currentUser = store.findUserById(req.user?.id ?? 0);
+    if (!currentUser?.must_change_password) return res.status(403).json({ message: "当前账号不需要强制修改密码" });
 
     try {
       store.forceChangePassword(req.user?.id ?? 0, parsed.data.newPassword);
-      return res.json({ message: "保存成功" });
+      const user = store.findUserById(req.user?.id ?? 0)!;
+      const token = signToken(user, jwtSecret);
+      setSessionCookie(req, res, token);
+      return res.json({ token, message: "保存成功" });
     } catch (error) {
       return res.status(400).json({ message: error instanceof Error ? error.message : "保存失败" });
     }

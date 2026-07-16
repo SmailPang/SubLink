@@ -34,6 +34,7 @@ type UserRecord = {
   last_client: string | null;
   last_access_at: string | null;
   must_change_password: 0 | 1;
+  auth_version: number;
   created_at: string;
   updated_at: string;
 };
@@ -102,15 +103,30 @@ const clients = [
 const userVisibleClients = clients.filter((item) => item.client !== "default" && item.client !== "v2ray");
 const passthroughHeaders = ["subscription-userinfo", "profile-update-interval", "profile-web-page-url", "support-url", "profile-title", "content-disposition"];
 
-function json(data: unknown, status = 200) {
+function json(data: unknown, status = 200, headers?: HeadersInit) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" }
+    headers: { "content-type": "application/json; charset=utf-8", ...(headers ?? {}) }
   });
 }
 
 function text(data: string, status = 200, headers?: HeadersInit) {
   return new Response(data, { status, headers: { "content-type": "text/plain; charset=utf-8", ...(headers ?? {}) } });
+}
+
+const contentSecurityPolicy = "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests";
+
+function secureResponse(response: Response, sensitive = false) {
+  const headers = new Headers(response.headers);
+  headers.set("content-security-policy", contentSecurityPolicy);
+  headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("x-frame-options", "DENY");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  headers.set("cross-origin-opener-policy", "same-origin-allow-popups");
+  if (sensitive) headers.set("cache-control", "no-store");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function now() {
@@ -126,7 +142,7 @@ function futureDate(months = 1) {
 function token(size = 24) {
   const bytes = new Uint8Array(size);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(36).padStart(2, "0")).join("").slice(0, size);
+  return base64Url(bytes);
 }
 
 function base64Url(bytes: ArrayBuffer | Uint8Array) {
@@ -149,12 +165,22 @@ async function hmac(secret: string, data: string) {
   return base64Url(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
 }
 
+async function verifyHmac(secret: string, data: string, signature: string) {
+  try {
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    return crypto.subtle.verify("HMAC", key, fromBase64Url(signature), new TextEncoder().encode(data));
+  } catch {
+    return false;
+  }
+}
+
 async function signJwt(user: UserRecord, secret: string) {
   const header = base64Url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
   const payload = base64Url(new TextEncoder().encode(JSON.stringify({
     id: user.id,
     username: user.username,
     role: user.role,
+    authVersion: user.auth_version,
     exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
   })));
   const body = `${header}.${payload}`;
@@ -162,13 +188,20 @@ async function signJwt(user: UserRecord, secret: string) {
 }
 
 async function verifyJwt(raw: string, secret: string) {
-  const parts = raw.split(".");
-  if (parts.length !== 3) return null;
-  const body = `${parts[0]}.${parts[1]}`;
-  if (await hmac(secret, body) !== parts[2]) return null;
-  const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[1]))) as { id: number; username: string; role: "admin" | "user"; exp: number };
-  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
-  return payload;
+  try {
+    const parts = raw.split(".");
+    if (parts.length !== 3) return null;
+    const header = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[0]))) as { alg?: string; typ?: string };
+    if (header.alg !== "HS256" || header.typ !== "JWT") return null;
+    const body = `${parts[0]}.${parts[1]}`;
+    if (!(await verifyHmac(secret, body, parts[2]))) return null;
+    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[1]))) as { id?: number; username?: string; role?: "admin" | "user"; authVersion?: number; exp?: number };
+    if (!Number.isInteger(payload.id) || typeof payload.username !== "string" || !["admin", "user"].includes(payload.role ?? "") ||
+      !Number.isInteger(payload.authVersion) || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload as { id: number; username: string; role: "admin" | "user"; authVersion: number; exp: number };
+  } catch {
+    return null;
+  }
 }
 
 async function hashPassword(password: string, salt = token(16)) {
@@ -183,7 +216,7 @@ async function verifyPassword(password: string, user: UserRecord) {
 }
 
 async function verifyTurnstileToken(tokenValue: string, env: Env, request: Request) {
-  if (!env.TURNSTILE_SECRET_KEY) return true;
+  if (!env.TURNSTILE_SECRET_KEY) return false;
   if (!tokenValue) return false;
 
   const body = new URLSearchParams({
@@ -275,6 +308,18 @@ async function ensureBootstrapUsers(env: Env) {
   if (!(userColumns.results ?? []).some((column) => column.name === "must_change_password")) {
     await env.DB.prepare("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0").run();
   }
+  if (!(userColumns.results ?? []).some((column) => column.name === "auth_version")) {
+    await env.DB.prepare("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1").run();
+  }
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS login_rate_limits (
+      rate_key TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      window_started_at TEXT NOT NULL,
+      blocked_until TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `).run();
   const userCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>();
   if ((userCount?.count ?? 0) > 0) return;
   const time = now();
@@ -282,12 +327,12 @@ async function ensureBootstrapUsers(env: Env) {
   const userPassword = await hashPassword("user123");
   await env.DB.batch([
     env.DB.prepare(`
-      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
-      VALUES (?, ?, ?, 'admin', 'active', ?, ?, ?, 1, ?, ?)
+      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, auth_version, created_at, updated_at)
+      VALUES (?, ?, ?, 'admin', 'active', ?, ?, ?, 1, 1, ?, ?)
     `).bind("admin", password.hash, password.salt, "2099-12-31T23:59:59.000Z", "Cloudflare 默认管理员", token(), time, time),
     env.DB.prepare(`
-      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
-      VALUES (?, ?, ?, 'user', 'active', ?, ?, ?, 1, ?, ?)
+      INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, auth_version, created_at, updated_at)
+      VALUES (?, ?, ?, 'user', 'active', ?, ?, ?, 1, 1, ?, ?)
     `).bind("user", userPassword.hash, userPassword.salt, futureDate(), "Cloudflare 默认用户", token(), time, time)
   ]);
 }
@@ -304,15 +349,102 @@ async function getUserById(env: Env, id: number) {
   return env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRecord>();
 }
 
+const SESSION_COOKIE = "sublink_session";
+
+function cookieValue(request: Request, name: string) {
+  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) {
+      try { return decodeURIComponent(value.join("=")); } catch { return ""; }
+    }
+  }
+  return "";
+}
+
+function sessionCookie(value: string) {
+  return `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; Max-Age=${7 * 24 * 60 * 60}; HttpOnly; Secure; SameSite=Strict`;
+}
+
+function clearSessionCookie() {
+  return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
+}
+
+function sameOrigin(request: Request) {
+  const origin = request.headers.get("origin");
+  return !origin || origin === new URL(request.url).origin;
+}
+
+function csrfError(request: Request, source: "bearer" | "cookie") {
+  return source === "cookie" && !["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase()) && !sameOrigin(request)
+    ? json({ message: "请求来源校验失败" }, 403)
+    : null;
+}
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 5;
+
+async function loginRateKey(kind: "ip" | "account", value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${kind}:${value.trim().toLowerCase()}`));
+  return base64Url(digest);
+}
+
+async function loginRateKeys(request: Request, username: string) {
+  return Promise.all([
+    loginRateKey("ip", requestIp(request) || "unknown"),
+    loginRateKey("account", username)
+  ]);
+}
+
+async function loginRetryAfter(env: Env, keys: string[]) {
+  const nowMs = Date.now();
+  let retryAfter = 0;
+  for (const key of keys) {
+    const row = await env.DB.prepare("SELECT blocked_until FROM login_rate_limits WHERE rate_key = ?").bind(key).first<{ blocked_until: string | null }>();
+    const blockedUntil = row?.blocked_until ? new Date(row.blocked_until).getTime() : 0;
+    if (blockedUntil > nowMs) retryAfter = Math.max(retryAfter, Math.ceil((blockedUntil - nowMs) / 1000));
+  }
+  return retryAfter;
+}
+
+async function recordLoginFailure(env: Env, keys: string[]) {
+  const nowMs = Date.now();
+  const time = new Date(nowMs).toISOString();
+  const cutoff = nowMs - LOGIN_WINDOW_MS;
+  const statements: D1PreparedStatement[] = [];
+  for (const key of keys) {
+    const row = await env.DB.prepare("SELECT attempts, window_started_at FROM login_rate_limits WHERE rate_key = ?").bind(key)
+      .first<{ attempts: number; window_started_at: string }>();
+    const resetWindow = !row || new Date(row.window_started_at).getTime() <= cutoff;
+    const attempts = resetWindow ? 1 : row.attempts + 1;
+    const windowStartedAt = resetWindow ? time : row.window_started_at;
+    const blockedUntil = attempts >= LOGIN_MAX_ATTEMPTS ? new Date(nowMs + LOGIN_WINDOW_MS).toISOString() : null;
+    statements.push(env.DB.prepare(`
+      INSERT INTO login_rate_limits (rate_key, attempts, window_started_at, blocked_until, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(rate_key) DO UPDATE SET attempts = excluded.attempts, window_started_at = excluded.window_started_at,
+        blocked_until = excluded.blocked_until, updated_at = excluded.updated_at
+    `).bind(key, attempts, windowStartedAt, blockedUntil, time));
+  }
+  await env.DB.batch(statements);
+}
+
+async function clearLoginFailures(env: Env, keys: string[]) {
+  await env.DB.prepare(`DELETE FROM login_rate_limits WHERE rate_key IN (${keys.map(() => "?").join(",")})`).bind(...keys).run();
+}
+
 async function getAuthedUser(request: Request, env: Env) {
-  const raw = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!env.JWT_SECRET) return { error: json({ message: "登录安全配置不完整，请联系管理员" }, 503) };
+  const bearer = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  const cookie = cookieValue(request, SESSION_COOKIE);
+  const raw = bearer || cookie;
   if (!raw) return { error: json({ message: "请先登录" }, 401) };
-  const payload = await verifyJwt(raw, env.JWT_SECRET || "sublink-cloudflare-secret");
+  const payload = await verifyJwt(raw, env.JWT_SECRET);
   if (!payload) return { error: json({ message: "请先登录" }, 401) };
   const user = await getUserById(env, payload.id);
   if (!user) return { error: json({ message: "请先登录" }, 401) };
+  if (payload.authVersion !== user.auth_version) return { error: json({ message: "登录状态已失效，请重新登录" }, 401) };
   if (user.status === "disabled") return { error: json({ message: "账号已被停用" }, 403) };
-  return { user };
+  return { user, source: bearer ? "bearer" as const : "cookie" as const };
 }
 
 async function requireAdmin(request: Request, env: Env) {
@@ -494,12 +626,29 @@ async function handleApi(request: Request, env: Env, path: string) {
 
   if (path === "/api/auth/login" && method === "POST") {
     await ensureBootstrapUsers(env);
+    if (!env.JWT_SECRET || !env.TURNSTILE_SECRET_KEY) return json({ message: "登录安全配置不完整，请联系管理员" }, 503);
     const input = await bodyJson<{ username?: string; password?: string; turnstileToken?: string }>(request);
+    if (!input.username || !input.password || input.username.length > 64 || input.password.length > 256) return json({ message: "账号或密码错误" }, 400);
     if (!(await verifyTurnstileToken(input.turnstileToken ?? "", env, request))) return json({ message: "人机验证失败，请重试" }, 403);
-    const user = input.username ? await env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(input.username).first<UserRecord>() : null;
-    if (!user || !input.password || !(await verifyPassword(input.password, user))) return json({ message: "账号或密码错误" }, 401);
-    if (user.status === "disabled") return json({ message: "账号已被停用" }, 403);
-    return json({ token: await signJwt(user, env.JWT_SECRET || "sublink-cloudflare-secret"), user: publicUser(user) });
+    const keys = await loginRateKeys(request, input.username);
+    const retryAfter = await loginRetryAfter(env, keys);
+    if (retryAfter > 0) return json({ message: "登录尝试过于频繁，请稍后再试" }, 429, { "retry-after": String(retryAfter) });
+    const user = await env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(input.username).first<UserRecord>();
+    if (!user || !(await verifyPassword(input.password, user))) {
+      await recordLoginFailure(env, keys);
+      return json({ message: "账号或密码错误" }, 401);
+    }
+    if (user.status === "disabled") {
+      await recordLoginFailure(env, keys);
+      return json({ message: "账号已被停用" }, 403);
+    }
+    await clearLoginFailures(env, keys);
+    const authToken = await signJwt(user, env.JWT_SECRET);
+    return json({ token: authToken, user: publicUser(user) }, 200, { "set-cookie": sessionCookie(authToken) });
+  }
+
+  if (path === "/api/auth/logout" && method === "POST") {
+    return json({ message: "已退出登录" }, 200, { "set-cookie": clearSessionCookie() });
   }
 
   if (path === "/api/auth/me") {
@@ -511,6 +660,8 @@ async function handleApi(request: Request, env: Env, path: string) {
   if (path.startsWith("/api/user/")) {
     const auth = await getAuthedUser(request, env);
     if (auth.error) return auth.error;
+    const csrf = csrfError(request, auth.source);
+    if (csrf) return csrf;
     const user = auth.user;
 
     if (path === "/api/user/subscription") {
@@ -594,22 +745,31 @@ async function handleApi(request: Request, env: Env, path: string) {
       if (!input.currentPassword || !input.newPassword || input.newPassword.length < 6) return json({ message: "表单内容不完整" }, 400);
       if (!(await verifyPassword(input.currentPassword, user))) return json({ message: "当前密码错误" }, 400);
       const hashed = await hashPassword(input.newPassword);
-      await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, updated_at = ? WHERE id = ?").bind(hashed.hash, hashed.salt, now(), user.id).run();
-      return json({ message: "保存成功" });
+      await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, auth_version = auth_version + 1, updated_at = ? WHERE id = ?")
+        .bind(hashed.hash, hashed.salt, now(), user.id).run();
+      const nextUser = (await getUserById(env, user.id))!;
+      const authToken = await signJwt(nextUser, env.JWT_SECRET!);
+      return json({ token: authToken, message: "保存成功" }, 200, { "set-cookie": sessionCookie(authToken) });
     }
 
     if (path === "/api/user/force-password" && method === "POST") {
+      if (!user.must_change_password) return json({ message: "当前账号不需要强制修改密码" }, 403);
       const input = await bodyJson<{ newPassword?: string }>(request);
       if (!input.newPassword || input.newPassword.length < 6) return json({ message: "密码不能少于 6 位" }, 400);
       const hashed = await hashPassword(input.newPassword);
-      await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, updated_at = ? WHERE id = ?").bind(hashed.hash, hashed.salt, now(), user.id).run();
-      return json({ message: "保存成功" });
+      await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, auth_version = auth_version + 1, updated_at = ? WHERE id = ?")
+        .bind(hashed.hash, hashed.salt, now(), user.id).run();
+      const nextUser = (await getUserById(env, user.id))!;
+      const authToken = await signJwt(nextUser, env.JWT_SECRET!);
+      return json({ token: authToken, message: "保存成功" }, 200, { "set-cookie": sessionCookie(authToken) });
     }
   }
 
   if (path.startsWith("/api/admin/")) {
     const auth = await requireAdmin(request, env);
     if (auth.error) return auth.error;
+    const csrf = csrfError(request, auth.source);
+    if (csrf) return csrf;
 
     if (path === "/api/admin/dashboard") {
       const today = new Date().toISOString().slice(0, 10);
@@ -699,8 +859,8 @@ async function handleApi(request: Request, env: Env, path: string) {
         const hashed = await hashPassword(input.password);
         const time = now();
         await env.DB.prepare(`
-          INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'active', ?, ?, ?, 1, ?, ?)
+          INSERT INTO users (username, password_hash, password_salt, role, status, expires_at, remark, token, must_change_password, auth_version, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'active', ?, ?, ?, 1, 1, ?, ?)
         `).bind(input.username, hashed.hash, hashed.salt, input.role ?? "user", input.expiresAt ?? futureDate(), input.remark ?? "", token(), time, time).run();
         const user = await env.DB.prepare("SELECT * FROM users WHERE username = ?").bind(input.username).first<UserRecord>();
         await writeAdminAudit(env, request, auth.user, "user.create", "user", String(user?.id ?? ""), { username: input.username, role: input.role ?? "user" });
@@ -719,7 +879,9 @@ async function handleApi(request: Request, env: Env, path: string) {
       } else if (input.action === "extend") {
         statement = env.DB.prepare(`UPDATE users SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, ?), updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`).bind(`+${input.days} days`, now(), ...ids);
       } else {
-        statement = env.DB.prepare(`UPDATE users SET status = ?, updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`).bind(input.action === "enable" ? "active" : "disabled", now(), ...ids);
+        const status = input.action === "enable" ? "active" : "disabled";
+        statement = env.DB.prepare(`UPDATE users SET status = ?, auth_version = auth_version + CASE WHEN ? = 'disabled' THEN 1 ELSE 0 END, updated_at = ? WHERE id IN (${placeholders}) AND role != 'admin'`)
+          .bind(status, status, now(), ...ids);
       }
       const result = await statement.run();
       const affected = Number((result.meta as { changes?: number }).changes ?? ids.length);
@@ -739,8 +901,9 @@ async function handleApi(request: Request, env: Env, path: string) {
         const input = await bodyJson<{ username?: string; expiresAt?: string; remark?: string; status?: "active" | "disabled" }>(request);
         const old = await getUserById(env, id);
         if (!old) return json({ message: "用户不存在" }, 404);
-        await env.DB.prepare("UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, updated_at = ? WHERE id = ?")
-          .bind(input.username ?? old.username, input.expiresAt ?? old.expires_at, input.remark ?? old.remark, input.status ?? old.status, now(), id).run();
+        const nextStatus = input.status ?? old.status;
+        await env.DB.prepare("UPDATE users SET username = ?, expires_at = ?, remark = ?, status = ?, auth_version = auth_version + CASE WHEN ? = 'disabled' AND status != 'disabled' THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?")
+          .bind(input.username ?? old.username, input.expiresAt ?? old.expires_at, input.remark ?? old.remark, nextStatus, nextStatus, now(), id).run();
         const user = await getUserById(env, id);
         await writeAdminAudit(env, request, auth.user, "user.update", "user", String(id), input);
         return json({ user: publicUser(user!) });
@@ -756,7 +919,7 @@ async function handleApi(request: Request, env: Env, path: string) {
         return json({ user: publicUser((await getUserById(env, id))!) });
       }
       if (action === "disable" && method === "POST") {
-        await env.DB.prepare("UPDATE users SET status = 'disabled', updated_at = ? WHERE id = ?").bind(now(), id).run();
+        await env.DB.prepare("UPDATE users SET status = 'disabled', auth_version = auth_version + 1, updated_at = ? WHERE id = ?").bind(now(), id).run();
         await writeAdminAudit(env, request, auth.user, "user.disable", "user", String(id));
         return json({ user: publicUser((await getUserById(env, id))!) });
       }
@@ -770,7 +933,8 @@ async function handleApi(request: Request, env: Env, path: string) {
         const input = await bodyJson<{ password?: string }>(request);
         if (!input.password || input.password.length < 6) return json({ message: "密码不能少于 6 位" }, 400);
         const hashed = await hashPassword(input.password);
-        await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, updated_at = ? WHERE id = ?").bind(hashed.hash, hashed.salt, now(), id).run();
+        await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, auth_version = auth_version + 1, updated_at = ? WHERE id = ?")
+          .bind(hashed.hash, hashed.salt, now(), id).run();
         await writeAdminAudit(env, request, auth.user, "user.password", "user", String(id));
         return json({ message: "保存成功" });
       }
@@ -982,14 +1146,15 @@ async function handleSubscription(request: Request, env: Env, path: string) {
 export const onRequest: PagesFunction<Env> = async ({ request, env, next }) => {
   try {
     const url = new URL(request.url);
-    if (url.pathname === "/api/health") return json({ status: "ok", message: "服务正常" });
-    if (url.pathname.startsWith("/api/")) return await handleApi(request, env, url.pathname);
-    if (url.pathname.startsWith("/sub/")) return await handleSubscription(request, env, url.pathname);
-    if (env.ASSETS) return await env.ASSETS.fetch(request);
-    return next();
+    let response: Response;
+    if (url.pathname === "/api/health") response = json({ status: "ok", message: "服务正常" });
+    else if (url.pathname.startsWith("/api/")) response = await handleApi(request, env, url.pathname);
+    else if (url.pathname.startsWith("/sub/")) response = await handleSubscription(request, env, url.pathname);
+    else if (env.ASSETS) response = await env.ASSETS.fetch(request);
+    else response = await next();
+    return secureResponse(response, url.pathname.startsWith("/api/") || url.pathname.startsWith("/sub/"));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Worker 运行异常";
-    console.error(error);
-    return json({ message: "服务器内部错误", detail: message }, 500);
+    console.error(JSON.stringify({ message: "Pages Function request failed", path: new URL(request.url).pathname, error: error instanceof Error ? error.message : String(error) }));
+    return secureResponse(json({ message: "服务器内部错误" }, 500), true);
   }
 };

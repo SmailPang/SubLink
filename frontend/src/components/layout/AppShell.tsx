@@ -21,6 +21,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }).catch(() => {
       setUser(null);
       setRole(null);
+      if (location.pathname !== "/login") navigate("/login", { replace: true });
     });
   }, [location.pathname, navigate]);
 

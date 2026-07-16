@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Sidebar } from "./Sidebar";
-import { api, clearToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { UserRole } from "@/types/user";
 
 export function Topbar({ role }: { role?: UserRole | null }) {
@@ -16,8 +16,8 @@ export function Topbar({ role }: { role?: UserRole | null }) {
     api.publicSettings().then((result) => setSiteName(result.settings.siteName || "SubLink")).catch(() => setSiteName("SubLink"));
   }, []);
 
-  function logout() {
-    clearToken();
+  async function logout() {
+    await api.logout().catch(() => undefined);
     navigate("/login", { replace: true });
   }
 

@@ -17,6 +17,7 @@ export interface UserRecord {
   last_client: string | null;
   last_access_at: string | null;
   must_change_password: 0 | 1;
+  auth_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -134,14 +135,17 @@ export interface AppConfig {
   dbPath?: string;
   jwtSecret?: string;
   turnstileSecret?: string;
+  turnstileVerifier?: (token: string, remoteIp?: string) => Promise<boolean>;
 }
 
 export interface AuthPayload {
   id: number;
   username: string;
   role: UserRole;
+  authVersion: number;
 }
 
 export interface AuthedRequest extends Request {
   user?: AuthPayload;
+  authSource?: "bearer" | "cookie";
 }

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, setToken } from "@/lib/api";
+import { api } from "@/lib/api";
 
 type TurnstileApi = {
   render: (container: string | HTMLElement, options: Record<string, unknown>) => string;
@@ -71,7 +71,6 @@ export function LoginPage() {
     setLoading(true);
     try {
       const result = await api.login(username, password, turnstileToken);
-      setToken(result.token);
       toast.success("登录成功");
       navigate(result.user.mustChangePassword ? "/user/force-password" : result.user.role === "admin" ? "/admin/dashboard" : "/user/subscription", { replace: true });
     } catch (error) {
